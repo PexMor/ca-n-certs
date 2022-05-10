@@ -1,0 +1,19 @@
+{
+    "CN": "000 Special Intermediate CA",
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "CZ",
+            "L": "Prague",
+            "O": "000 Special Org",
+            "OU": "000 Special Intermediate CA",
+            "ST": "Heart of Europe"
+        }
+    ],
+    "ca": {
+        "expiry": "42720h"
+    }
+}

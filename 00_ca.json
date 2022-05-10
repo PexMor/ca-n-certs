@@ -1,0 +1,16 @@
+{
+    "CN": "000 Special Root CA",
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "CZ",
+            "L": "Prague",
+            "O": "000 Special Org",
+            "OU": "000 Special CA",
+            "ST": "Heart of Europe"
+        }
+    ]
+}

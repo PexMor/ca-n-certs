@@ -1,0 +1,20 @@
+{
+    "CN": "localhost",
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "CZ",
+            "L": "Prague",
+            "O": "000 Special Org",
+            "OU": "000 Application Org Unit",
+            "ST": "Heart of Europe"
+        }
+    ],
+    "hosts": [
+        "localhost",
+        "*.lan"
+    ]
+}
