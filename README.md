@@ -6,11 +6,24 @@ The key path is `~/.config/demo-cfssl`.
 
 # Things to tweak
 
-This line in `./mkCert.sh` creates the actual host certificate `C_TYPE=server` (ref. [profiles.json](profiles.json)) `C_FN` is just a filename.
+This line in `./mkCert.sh` creates the actual host certificate:
 
-`mkCert 03_host.json $C_TYPE $C_FN`
+```bash
+# ...
+mkCert 03_host.json $C_TYPE $C_FN
+# ...
+```
 
-You should also tweak `03_host.json` either via `jq . 03_host.json | jq '.names[0].ST="Some" | .hosts=["super.name.lan"]' >tmp-03_host.json`
+parameters:
+
+* `C_TYPE=server` ref. [profiles.json](profiles.json)
+* `C_FN` is just a filename.
+
+You should also tweak `03_host.json` either via
+
+```bash
+jq . 03_host.json | jq '.names[0].ST="Some" | .hosts=["super.name.lan"]' >tmp-03_host.json
+```
 
 Also a thing to look at is the `profiles.json`...
 
