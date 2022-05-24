@@ -80,7 +80,10 @@ function mkCert() {
     else
         echo "Host certificate and key already exists"
     fi
+    # concatenate the server, intermediate and root ca
     cat $BD/${FN}-${PROFILE}.pem $BD/ica.pem $BD/ca.pem >$BD/${FN}-${PROFILE}-bundle.pem
+    # also create file suitable for haproxy
+    cat $BD/${FN}-${PROFILE}-bundle.pem $BD/${FN}-${PROFILE}-key.pem >$BD/${FN}-${PROFILE}-haproxy.pem
 }
 
 cat $BD/ica.pem $BD/ca.pem >$BD/ca-bundle.pem
