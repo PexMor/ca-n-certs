@@ -70,7 +70,7 @@ check intermediate CA CERT w/system root CA CERT - verifies the deployment went 
 openssl verify -verbose "$BP/ica.pem"
 ```
 
-> Note: in the following examples the parameter `-untrusted` is the actual and correct one, as the trustwothiness is verified by the root CA...
+> Note: in the following examples the parameter `-untrusted` is the actual and correct one, as the trustworthiness is verified by the root CA...
 
 check host CERT w/explicit root CA:
 
