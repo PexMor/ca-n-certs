@@ -75,6 +75,10 @@ Using `openssl` (https://wiki.openssl.org/index.php/Binaries)
 openssl x509 -in source.crt -inform der -out dest.pem -outform pem
 ```
 
+* online: https://www.sslshopper.com/ssl-converter.html
+* python: https://pythontic.com/ssl/ssl-module/der_cert_to_pem_cert
+* gnutls: `certtool --certificate-info --infile cert.der --inder --outfile cert.pem`
+
 Test:
 
 ```bash
