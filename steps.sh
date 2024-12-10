@@ -196,10 +196,10 @@ function x509info() {
                 printf "${AZURE}%10s${COFF} : %s\n" "$key" "$DT"
                 if [ $DUNIXTS -lt $NUNIXTS ]; then
                     DELTA_SECS=$[ $NUNIXTS - $DUNIXTS ]
-                    echo "${YELLOW}Days since${COFF} : $[ $DELTA_SECS / 86400 ] (${DELTA_SECS} secs)"
+                    printf "${YELLOW}Days since${COFF} : $[ $DELTA_SECS / 86400 ] (${DELTA_SECS} secs)\n"
                 else
                     DELTA_SECS=$[ $DUNIXTS - $NUNIXTS ]
-                    echo "${YELLOW}Days left${COFF}  : $[ $DELTA_SECS / 86400 ] (${DELTA_SECS} secs)"
+                    printf "${YELLOW}Days left${COFF}  : $[ $DELTA_SECS / 86400 ] (${DELTA_SECS} secs)\n"
                 fi
             else
                 # display DN
