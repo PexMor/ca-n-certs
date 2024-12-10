@@ -113,3 +113,21 @@ openssl verify -verbose -untrusted "$BP/ica.pem" "$BP/localhost-server.pem"
 This addition presents the use of generated CA's keys with `haproxy` in Docker container.
 
 To test at first run the certificate creation as described above and the run `./demoHaproxy.sh`
+
+## Do it on RaspberryPi
+
+Head to releases: <https://github.com/cloudflare/cfssl/releases>
+
+Select the latest build for `ARMv6` or `ARM64` if you are on RPi5 and later.
+
+At the time of writing it was `cfssl_1.6.5_linux_armv6`
+
+While revisiting the **one-click** solution I have found that for `day 2` operation perspective
+it might be too fast for certain use-cases. For that reason I would elaborate a bit on steps
+that you might find useful in case you do not need kind of **one-shot CA and server**.
+
+The procedure is following:
+
+1. generate **long term** CA certificate and key (like 10 years, do not forget **make note** in calendar!)
+2. do the same for **long term** intermediate CA certificate (same as above)
+3. generate **short term** certificate for what ever you need server, e-mail or even sub-CA (short period should be around 90 days - hint: **certbot - Let's Encrypt** policy)
