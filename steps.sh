@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 #
 # This script splits the mkCert.sh into three parts
 # please set the BD variable to the directory where the certificates will be stored
