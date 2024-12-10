@@ -216,7 +216,12 @@ function x509info() {
         done
     ALT_NAMES=`openssl x509 -noout -ext subjectAltName -in "$FN" 2>/dev/null | tr -d "\r\n" | cut -d: -f2- | $SED -e 's/^\s*//g'`
     if [ -n "$ALT_NAMES" ]; then
-        echo "${AZURE}Alt Names${COFF}  : $ALT_NAMES"
+        printf "${AZURE}Alt Names${COFF}  : "
+        echo "$ALT_NAMES" | sed -e 's/, /\n/g' | \
+            while IFS=":" read -r key value; do
+                printf "${RED}%s${COFF}=${GREEN}%s${COFF}, " "$key" "$value"
+            done
+        echo
     fi
 }
 
