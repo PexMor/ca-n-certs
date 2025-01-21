@@ -1,0 +1,12 @@
+http://10.5.0.4 {
+    respond "This is Caddy-2 @ 10.5.0.4"
+}
+http://10.5.1.4 {
+    respond "This is Caddy-2 @ 10.5.1.4"
+}
+http://10.5.2.4 {
+    respond "This is Caddy-2 @ 10.5.2.4"
+}
+http://:80 {
+    respond "Default Caddy-2 server"
+}

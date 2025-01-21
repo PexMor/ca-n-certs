@@ -4,15 +4,106 @@ This document describes how to add custom CA X.509 certificate
 (CA that is not distributed with a common trust stores)
 into various systems or environments.
 
-# Debian and Ubuntu
+Some hints also at: [Charles: SSL Certificates](https://www.charlesproxy.com/documentation/using-charles/ssl-certificates/)
 
-# Fedora and Redhat (Rocklinux, Almati)
+## Desktop OSes
 
-# Curl
+This section is about how to add a custom CA to the trust store of the OS.
 
-# Java
+### Debian and Ubuntu
 
-# Python (incl.Conda)
+```bash
+sudo cp myCA.pem /usr/local/share/ca-certificates/myCA.crt
+sudo update-ca-certificates
+```
+
+### Fedora and Redhat (Rocklinux, Almati)
+
+```bash
+sudo cp myCA.pem /etc/pki/ca-trust/source/anchors/myCA.pem
+sudo update-ca-trust
+```
+
+### MacOS
+
+```bash
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain myCA.pem
+```
+
+### Windows
+
+```powershell
+certutil -addstore -f "ROOT" myCA.pem
+```
+
+### FreeBSD
+
+```bash
+sudo cp myCA.pem /usr/local/share/certs/myCA.pem
+sudo c_rehash
+```
+
+## Mobile OSes
+
+This section describes how the custom CA can be added to the trust store of the mobile OS.
+
+### Android
+
+Click on the link on <http://my.server.com/myCA.pem> and follow the instructions.
+If the web server provides correct MIME type, the system will ask you to install the certificate.
+
+### iOS
+
+Click on the link on <http://my.server.com/myCA.pem> it should show a dialog stating:
+
+1. `Website is trying to download a new configuration profile. Do you want to allow this?`
+   Click `Allow` to download profile "myCA".
+2. It then says `Profile Downloaded: Review the profile in Settings app if you want to install it.`
+   Click `Close`
+3. Go to `Settings` -> `Profile Downloaded` and install the profile (top right corner).
+4. Enter the device passcode.
+5. Click `Install` in the next dialog.
+
+## Browsers
+
+How add CA certificate to the browser.
+
+### Firefox
+
+1. Open the Firefox browser.
+2. Click on the menu button (three horizontal lines) in the upper right corner.
+3. Click on `Options`.
+4. Click on `Privacy & Security`.
+5. Scroll down to the "Certificates" section.
+6. Click on `View Certificates`.
+7. Click on `Authorities`.
+8. Click on `Import`.
+9. Select the CA certificate file.
+10. Click on `Open`.
+11. Check the `Trust this CA to identify websites` checkbox.
+12. Click on `OK`.
+
+### Chrome and Chromium based
+
+Chrome and Chromium use the system trust store, so you have to add the CA to the system trust store.
+
+## Command line tools
+
+This section describes how to add the custom CA to the trust store of the command line tools.
+
+### Curl
+
+```bash
+curl --cacert myCA.pem https://my.server.com
+```
+
+### Java
+
+```bash
+sudo keytool -import -trustcacerts -alias myCA -file myCA.pem -keystore $JAVA_HOME/jre/lib/security/cacerts
+```
+
+### Python (incl.Conda)
 
 The most common package that provides the CA bundle (collection of trusted CA certs)
 is the [certify@PyPi](https://pypi.org/project/certifi/)
@@ -29,10 +120,10 @@ pip install certifi
 python -m certifi
 ```
 
-__Trick with system CA store__
+> **Trick with system CA store**
 
-* https://pypi.org/project/certifi-system-store/
-* https://pypi.org/project/pip-system-certs/
+- <https://pypi.org/project/certifi-system-store/>
+- <https://pypi.org/project/pip-system-certs/>
 
 ```bash
 SSL_CERT_FILE=/System/Library/OpenSSL/cert.pem
@@ -40,11 +131,11 @@ REQUESTS_CA_BUNDLE=/System/Library/OpenSSL/cert.pem
 conda config --set ssl_verify /path/to/converted/certificate.pem
 ```
 
-__.condarc__:
+**.condarc**:
 
 ```yaml
 channels:
-    - defaults
+  - defaults
 #ssl_verify: C:\Users\ravikumk\certs\ca.crt
 
 ssl_verify: false
@@ -60,7 +151,7 @@ conda update conda --insecure
 conda update openssl pyopenssl ca-certificates certifi --insecure
 ```
 
-__Do not DO this__ ... however:
+**Do not DO this** ... however:
 
 ```bash
 SSL_NO_VERIFY=1
@@ -69,15 +160,15 @@ conda config --set ssl_verify false
 
 If you have `DER` (binary, `.crt`) form of cert you have to convert it into `PEM`
 
-Using `openssl` (https://wiki.openssl.org/index.php/Binaries)
+Using `openssl` (<https://wiki.openssl.org/index.php/Binaries>)
 
 ```bash
 openssl x509 -in source.crt -inform der -out dest.pem -outform pem
 ```
 
-* online: https://www.sslshopper.com/ssl-converter.html
-* python: https://pythontic.com/ssl/ssl-module/der_cert_to_pem_cert
-* gnutls: `certtool --certificate-info --infile cert.der --inder --outfile cert.pem`
+- online: <https://www.sslshopper.com/ssl-converter.html>
+- python: <https://pythontic.com/ssl/ssl-module/der_cert_to_pem_cert>
+- gnutls: `certtool --certificate-info --infile cert.der --inder --outfile cert.pem`
 
 Test:
 
@@ -87,7 +178,7 @@ openssl s_client -connect www.google.com:443 -servername www.google.com -showcer
 
 that among other output yields (last cert it the one closest to the root CA, should be issued by the "root CA"):
 
-```
+```text
  2 s:/C=US/O=Google Trust Services LLC/CN=GTS Root R1
    i:/C=BE/O=GlobalSign nv-sa/OU=Root CA/CN=GlobalSign Root CA
 -----BEGIN CERTIFICATE-----
@@ -122,7 +213,3 @@ WprKASOshIArAoyZl+tJaox118fessmXn1hIVw41oeQa1v1vg4Fv74zPl6/AhSrw
 d0lIKO2d1xozclOzgjXPYovJJIultzkMu34qQb9Sz/yilrbCgj8=
 -----END CERTIFICATE-----
 ```
-
-# Android
-
-# iOS
