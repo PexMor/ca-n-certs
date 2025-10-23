@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  ocsp-responder:
+    build: .
+    container_name: demo-cfssl-ocsp
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount certificate directory (read-only)
+      - ~/.config/demo-cfssl:/certs:ro
+    environment:
+      - DEMO_CFSSL_DIR=/certs
+      - OCSP_HOST=0.0.0.0
+      - OCSP_PORT=8080
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    networks:
+      - ocsp-network
+
+networks:
+  ocsp-network:
+    driver: bridge
+
