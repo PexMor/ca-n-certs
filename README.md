@@ -8,22 +8,49 @@ CA, ICA and server DN.O: `000 Special Org`
 
 Other components of the X.509 DN (distingushed name is in `*.json`)
 
-| file name                    | purpose - description                       |
-| ---------------------------- | ------------------------------------------- |
-| ca-bundle.pem                | root CA + intermediate CA certs             |
-| ca-key.pem                   | private key for root CA                     |
-| ca.csr                       | CA signing request                          |
-| ca.pem                       | root CA cert                                |
-| dhparam.pem                  | DH parameters used by TLS server            |
-| ica-key.pem                  | intermediate CA cert                        |
-| ica-self.pem                 | self-signed interediate CA cert             |
-| ica.csr                      | intermediate CA signing requests            |
-| ica.pem                      | root CA signed intermediate CA certificate  |
-| localhost-server-bundle.pem  | server cert + ca-bundle                     |
-| localhost-server-haproxy.pem | server bundle + private key for server cert |
-| localhost-server-key.pem     | server private key                          |
-| localhost-server.csr         | server cert signign request                 |
-| localhost-server.pem         | server cert alone                           |
+| file name     | purpose - description                          |
+| ------------- | ---------------------------------------------- |
+| ca-bundle.pem | root CA + intermediate CA certs                |
+| ca-key.pem    | private key for root CA                        |
+| ca.csr        | CA signing request                             |
+| ca.pem        | root CA cert                                   |
+| dhparam.pem   | DH parameters used by TLS server               |
+| ica-key.pem   | private key for intermediate CA                |
+| ica-self.pem  | self-signed intermediate CA cert               |
+| ica.csr       | intermediate CA signing requests               |
+| ica.pem       | root CA signed intermediate CA certificate     |
+| hosts/        | directory containing host/server certificates  |
+| smime/        | directory containing S/MIME email certificates |
+
+### Hosts Directory Structure
+
+Files in `hosts/<hostname>/` (e.g., `hosts/localhost/`):
+
+| file name    | purpose - description                         |
+| ------------ | --------------------------------------------- |
+| cfg.json     | certificate configuration with CN and SANs    |
+| host.json    | full certificate response from cfssl          |
+| cert.pem     | host/server certificate (public key)          |
+| key.pem      | private key for the certificate               |
+| host.csr     | certificate signing request                   |
+| bundle-2.pem | cert + intermediate CA                        |
+| bundle-3.pem | cert + intermediate CA + root CA (full chain) |
+| haproxy.pem  | bundle-3.pem + key.pem (for HAProxy)          |
+
+### S/MIME Directory Structure
+
+Files in `smime/<person-name>/` (e.g., `smime/john_doe/`):
+
+| file name    | purpose - description                           |
+| ------------ | ----------------------------------------------- |
+| cfg.json     | certificate configuration with CN and emails    |
+| email.json   | full certificate response from cfssl            |
+| cert.pem     | S/MIME certificate (public key)                 |
+| key.pem      | private key for the certificate                 |
+| email.csr    | certificate signing request                     |
+| bundle-2.pem | cert + intermediate CA                          |
+| bundle-3.pem | cert + intermediate CA + root CA (full chain)   |
+| email.p12    | PKCS#12 bundle for importing into email clients |
 
 ## Things to tweak
 
@@ -131,3 +158,109 @@ The procedure is following:
 1. generate **long term** CA certificate and key (like 10 years, do not forget **make note** in calendar!)
 2. do the same for **long term** intermediate CA certificate (same as above)
 3. generate **short term** certificate for what ever you need server, e-mail or even sub-CA (short period should be around 90 days - hint: **certbot - Let's Encrypt** policy)
+
+## Notes
+
+`8760` hours = `365` days
+
+### Cert validity
+
+as of `Oct23 2025`
+
+For host (TLS/SSL) certificates, the current maximum validity period is
+398 days, but this is being phased out in favor of shorter lifecycles. There is no official recommendation for email (S/MIME) certificates, but best practices suggest using a new key pair for each certificate and ensuring an annual renewal.
+
+#### Current recommendations for host (TLS/SSL) certificates
+
+The CA/Browser Forum, an industry body that includes major browsers like Apple, Google, and Microsoft, has approved a new schedule to progressively reduce the maximum validity of public TLS certificates.
+
+- Current maximum (until March 15, 2026): 398 days, or approximately 13 months.
+- Starting March 15, 2026: Maximum validity will be reduced to 200 days.
+- Starting March 15, 2027: Maximum validity will drop to 100 days.
+- Starting March 15, 2029: Maximum validity will be limited to just 47 days.
+
+These changes are driven by security concerns, as shorter validity periods reduce the window of opportunity for attackers to exploit compromised keys or misissued certificates.
+
+#### Recommendations for email (S/MIME) certificates
+
+Email certificates, known as S/MIME certificates, are not subject to the same CA/Browser Forum rules as TLS/SSL certificates.
+
+- Maximum validity: The validity period for S/MIME certificates is not publicly dictated by the CA/Browser Forum and is generally longer, with a maximum validity period of up to three years.
+- Best practices: While not mandatory, best practices for secure email encourage shorter lifecycles and frequent key rotation. The following are suggested to improve security:
+  - Annual renewal: Set a policy to renew S/MIME certificates on an annual basis.
+  - New key pair: Generate a new public/private key pair with each renewal. This prevents attackers who might compromise an old key from decrypting future email traffic.
+  - Automate management: Given the increasing complexity, automate the management of email certificates to ensure timely renewals and proper configuration.
+
+## S/MIME Email Certificates
+
+The `step_email` function generates S/MIME certificates for email signing and encryption following RFC 5280 standards.
+
+### Usage
+
+```bash
+# Generate email certificate for a person
+step_email "Person Name" email1@example.com [email2@example.com ...]
+```
+
+Parameters:
+
+- First parameter: Person's name (becomes the CN in the certificate)
+- Remaining parameters: Email addresses (added to Subject Alternative Name as rfc822Name)
+
+Example:
+
+```bash
+step_email "John Doe" john.doe@example.com john@company.com
+```
+
+### Generated Files
+
+Certificates are stored in `$BD/smime/<slugified-name>/` directory:
+
+| File name    | Purpose                                               |
+| ------------ | ----------------------------------------------------- |
+| cfg.json     | Certificate configuration with CN and email addresses |
+| email.json   | Full certificate response from cfssl                  |
+| cert.pem     | S/MIME certificate (public key)                       |
+| key.pem      | Private key                                           |
+| email.csr    | Certificate signing request                           |
+| bundle-2.pem | Certificate + intermediate CA                         |
+| bundle-3.pem | Certificate + intermediate CA + root CA               |
+| email.p12    | PKCS#12 file for importing into email clients         |
+
+Note: The folder name is slugified (e.g., "John Doe" → "john_doe") for filesystem safety.
+
+### PKCS#12 Password
+
+By default, the PKCS#12 file is created without a password for ease of use. To set a password:
+
+```bash
+EMAIL_P12_PASSWORD="mypassword" step_email "John Doe" john.doe@example.com
+```
+
+### Importing into Email Clients
+
+The `email.p12` file can be imported into:
+
+- **Thunderbird**: Settings → Privacy & Security → Certificates → Manage Certificates → Your Certificates → Import
+- **Outlook**: File → Options → Trust Center → Trust Center Settings → Email Security → Import/Export
+- **Apple Mail**: Double-click the .p12 file or import via Keychain Access
+- **Gmail/Webmail**: Settings → Accounts → Add S/MIME certificate
+
+After importing, you'll be able to digitally sign and encrypt emails using your certificate.
+
+### Certificate Profile
+
+The email profile uses the following key usages suitable for S/MIME:
+
+- `signing` - General signing capability
+- `digital signature` - For signing emails
+- `key encipherment` - For encrypting emails
+
+Default expiry: 1 year (8760 hours)
+
+## To-Dos
+
+- TSA/TSP (Time Stamping Authority/Protocol)
+- OCSP (Online Certificate Status Protocol)
+- CRL (Certificate Revocation List)

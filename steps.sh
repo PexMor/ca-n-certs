@@ -7,7 +7,7 @@
 # stop on error
 set -e
 
-DEF_BD="$HOME/.config/my-cfssl"
+DEF_BD="$HOME/.config/demo-cfssl"
 BD=${1:-$DEF_BD}
 # check whether your are running on MacOS or Linux
 # and set the STAT to point either stat or gstat
@@ -36,6 +36,9 @@ COFF='\033[0m'
 # KEY_SIZE=4096
 KEY_ALGO="ecdsa"
 KEY_SIZE=384
+CA_EXPIRY=`expr 365 \* 24`
+HOST_EXPIRY=`expr 47 \* 24`
+EMAIL_EXPIRY=`expr 265 \* 24`
 
 JSON_00_CA=`cat <<EOF
 {
@@ -54,7 +57,7 @@ JSON_00_CA=`cat <<EOF
         }
     ],
     "ca": {
-        "expiry": "87600h"
+        "expiry": "${CA_EXPIRY}h"
     }
 }
 EOF
@@ -77,7 +80,7 @@ JSON_01_ICA=`cat <<EOF
         }
     ],
     "ca": {
-        "expiry": "87600h"
+        "expiry": "${CA_EXPIRY}h"
     }
 }
 EOF
@@ -90,6 +93,7 @@ JSON_02_HOST=`cat <<EOF
         "algo": "$KEY_ALGO",
         "size": $KEY_SIZE
     },
+    "expiry": "${HOST_EXPIRY}h",
     "names": [
         {
             "C": "CZ",
@@ -107,11 +111,33 @@ JSON_02_HOST=`cat <<EOF
 EOF
 `
 
+JSON_03_EMAIL=`cat <<EOF
+{
+    "CN": "User Name",
+    "key": {
+        "algo": "$KEY_ALGO",
+        "size": $KEY_SIZE
+    },
+    "expiry": "${EMAIL_EXPIRY}h",
+    "names": [
+        {
+            "C": "CZ",
+            "L": "Prague",
+            "O": "At Home Company",
+            "OU": "Security Dept.",
+            "ST": "Heart of Europe"
+        }
+    ],
+    "hosts": []
+}
+EOF
+`
+
 JSON_PROFILES=`cat <<EOF
 {
     "signing": {
         "default": {
-            "expiry": "8760h"
+            "expiry": "${CA_EXPIRY}h"
         },
         "profiles": {
             "intermediate_ca": {
@@ -124,7 +150,7 @@ JSON_PROFILES=`cat <<EOF
                     "server auth",
                     "client auth"
                 ],
-                "expiry": "87600h",
+                "expiry": "${CA_EXPIRY}h",
                 "ca_constraint": {
                     "is_ca": true,
                     "max_path_len": 0,
@@ -139,7 +165,7 @@ JSON_PROFILES=`cat <<EOF
                     "client auth",
                     "server auth"
                 ],
-                "expiry": "8760h"
+                "expiry": "${HOST_EXPIRY}h"
             },
             "server": {
                 "usages": [
@@ -148,7 +174,7 @@ JSON_PROFILES=`cat <<EOF
                     "key encipherment",
                     "server auth"
                 ],
-                "expiry": "2160h"
+                "expiry": "${HOST_EXPIRY}h"
             },
             "client": {
                 "usages": [
@@ -157,7 +183,15 @@ JSON_PROFILES=`cat <<EOF
                     "key encipherment",
                     "client auth"
                 ],
-                "expiry": "8760h"
+                "expiry": "${HOST_EXPIRY}h"
+            },
+            "email": {
+                "usages": [
+                    "signing",
+                    "digital signature",
+                    "key encipherment"
+                ],
+                "expiry": "${EMAIL_EXPIRY}h"
             }
         }
     }
@@ -239,6 +273,11 @@ if [ ! -f "$BD/02_host.json" ]; then
     echo "$JSON_02_HOST" > $BD/02_host.json
 else
     echo "02_host.json exists"
+fi
+if [ ! -f "$BD/03_email.json" ]; then
+    echo "$JSON_03_EMAIL" > $BD/03_email.json
+else
+    echo "03_email.json exists"
 fi
 if [ ! -f "$BD/profiles.json" ]; then
     echo "$JSON_PROFILES" > $BD/profiles.json
@@ -349,6 +388,97 @@ function step03() {
     x509info $BD/hosts/${NAME}/cert.pem
 }
 
+function step_email() {
+    # Generate S/MIME certificate for email signing and encryption
+    # Usage: step_email "Person Name" email1@example.com [email2@example.com ...]
+    # First parameter is the CN (person's name)
+    # Remaining parameters are email addresses (added to SAN)
+    local NAME=$1
+    shift
+    EMAIL_ADDRESSES=$@
+    
+    # Create slugified folder name from CN (lowercase, replace spaces/special chars with underscore)
+    local FOLDER_NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | $SED 's/[^a-z0-9]/_/g' | $SED 's/__*/_/g' | $SED 's/^_//;s/_$//')
+    
+    # Create directory for this email certificate
+    mkdir -p "$BD/smime/$FOLDER_NAME"
+    
+    # Build comma-separated list of email addresses for hosts field
+    VALS=`join_by , ${EMAIL_ADDRESSES[@]}`
+    
+    # Generate certificate configuration from email template
+    jq ".CN=\"$NAME\"" "$BD/03_email.json" | \
+        jq --arg value "$VALS" '.hosts = ($value / ",")' | \
+        cat > "$BD/smime/${FOLDER_NAME}/cfg.json"
+    
+    # check the validity of the certificate
+    if [ -f "$BD/smime/${FOLDER_NAME}/cert.pem" ]; then
+        END_DATE=`openssl x509 -in "$BD/smime/${FOLDER_NAME}/cert.pem" -noout -enddate | cut -d"=" -f2`
+        END_DATE_SECS=`$DATE -d "$END_DATE" +%s`
+        NUNIXTS=`$DATE +%s`
+        if [ $END_DATE_SECS -lt $NUNIXTS ]; then
+            echo "The certificate smime/${FOLDER_NAME}/cert.pem is expired"
+            echo "Removing the expired certificate"
+            rm -f "$BD/smime/${FOLDER_NAME}/cert.pem"
+            # we might want to keep the key for the future
+            rm -f "$BD/smime/${FOLDER_NAME}/key.pem"
+            rm -f "$BD/smime/${FOLDER_NAME}/email.json"
+            rm -f "$BD/smime/${FOLDER_NAME}/bundle-2.pem"
+            rm -f "$BD/smime/${FOLDER_NAME}/bundle-3.pem"
+            rm -f "$BD/smime/${FOLDER_NAME}/email.p12"
+        else
+            echo "The certificate smime/${FOLDER_NAME}/cert.pem is still valid"
+        fi
+    fi
+    
+    if [ ! -f "$BD/smime/${FOLDER_NAME}/email.json" ]; then
+        echo "Generating email certificate for '$NAME'"
+        echo "Email addresses: $EMAIL_ADDRESSES"
+        
+        # Generate certificate with email profile
+        cfssl gencert \
+            -ca "$BD/ica-ca.pem" \
+            -ca-key "$BD/ica-key.pem" \
+            -config "$BD/profiles.json" \
+            -profile=email \
+            "$BD/smime/${FOLDER_NAME}/cfg.json" > "$BD/smime/${FOLDER_NAME}/email.json"
+        
+        # Extract certificate components
+        jq -r .cert "$BD/smime/${FOLDER_NAME}/email.json" > "$BD/smime/${FOLDER_NAME}/cert.pem"
+        jq -r .key "$BD/smime/${FOLDER_NAME}/email.json" > "$BD/smime/${FOLDER_NAME}/key.pem"
+        jq -r .csr "$BD/smime/${FOLDER_NAME}/email.json" > "$BD/smime/${FOLDER_NAME}/email.csr"
+        
+        # concatenate the certificate, intermediate
+        cat "$BD/smime/${FOLDER_NAME}/cert.pem" "$BD/ica-ca.pem" > "$BD/smime/${FOLDER_NAME}/bundle-2.pem"
+        # concatenate the certificate, intermediate and root ca
+        cat "$BD/smime/${FOLDER_NAME}/cert.pem" "$BD/ica-ca.pem" "$BD/ca.pem" > "$BD/smime/${FOLDER_NAME}/bundle-3.pem"
+        
+        # Create PKCS#12 file for email clients (Thunderbird, Outlook, etc.)
+        # Password can be configured via EMAIL_P12_PASSWORD environment variable
+        P12_PASS="${EMAIL_P12_PASSWORD:-}"
+        if [ -z "$P12_PASS" ]; then
+            echo "Creating PKCS#12 file without password (use EMAIL_P12_PASSWORD env var to set password)"
+            openssl pkcs12 -export -out "$BD/smime/${FOLDER_NAME}/email.p12" \
+                -inkey "$BD/smime/${FOLDER_NAME}/key.pem" \
+                -in "$BD/smime/${FOLDER_NAME}/bundle-3.pem" \
+                -name "${NAME}" \
+                -passout pass:
+        else
+            echo "Creating PKCS#12 file with password"
+            openssl pkcs12 -export -out "$BD/smime/${FOLDER_NAME}/email.p12" \
+                -inkey "$BD/smime/${FOLDER_NAME}/key.pem" \
+                -in "$BD/smime/${FOLDER_NAME}/bundle-3.pem" \
+                -name "${NAME}" \
+                -passout pass:$P12_PASS
+        fi
+        echo "Saved PKCS#12 file to $BD/smime/${FOLDER_NAME}/email.p12"
+        echo "Import this file into your email client to use for S/MIME signing and encryption"
+    else
+        echo "Email certificate smime/${FOLDER_NAME}/email.json already exists"
+    fi
+    x509info "$BD/smime/${FOLDER_NAME}/cert.pem"
+}
+
 # The main script
 # Step 1 - prepare the Root CA (if not exists)
 # ususally you run this step only once (or once every 10 years = expiry date - 10%)
@@ -366,4 +496,6 @@ step02 # prepare the Intermediate CA
 # prepare the server(s) certificate, set the cn and alternative names
 # note the first argument is the common name (CN) and the rest are alternative names
 # CN is also the name of the file where the certificate will be stored
-step03 localhost '*.lan' 
+step03 localhost '*.lan'
+
+step_email "John Doe" john.doe@example.com john@company.com

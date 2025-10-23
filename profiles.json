@@ -38,7 +38,7 @@
                     "key encipherment",
                     "server auth"
                 ],
-                "expiry": "8760h"
+                "expiry": "1128h"
             },
             "client": {
                 "usages": [
@@ -46,6 +46,14 @@
                     "digital signature",
                     "key encipherment",
                     "client auth"
+                ],
+                "expiry": "1128h"
+            },
+            "email": {
+                "usages": [
+                    "signing",
+                    "digital signature",
+                    "key encipherment"
                 ],
                 "expiry": "8760h"
             }
