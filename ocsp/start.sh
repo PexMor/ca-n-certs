@@ -51,6 +51,17 @@ if [ ! -d ".venv" ]; then
 else
     echo -e "${GREEN}✓ Virtual environment found${COFF}"
     source .venv/bin/activate
+    
+    # Check if dependencies are installed
+    if ! python -c "import fastapi" 2>/dev/null; then
+        echo -e "${YELLOW}ℹ Installing dependencies...${COFF}"
+        if command -v uv &> /dev/null; then
+            uv pip install -r requirements.txt
+        else
+            pip install -r requirements.txt
+        fi
+        echo -e "${GREEN}✓ Dependencies installed${COFF}"
+    fi
 fi
 
 echo ""

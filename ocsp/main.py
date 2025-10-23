@@ -39,6 +39,7 @@ class OCSPResponder:
     """OCSP Responder handling certificate status checks"""
     
     def __init__(self):
+        self.cert_dir = BD  # Certificate directory for lookups
         self.ca_cert = None
         self.ca_key = None
         self.ica_cert = None
@@ -135,14 +136,49 @@ class OCSPResponder:
             return 'revoked', revoked_info
         return 'good', None
     
+    def find_certificate_by_serial(self, serial_number: int) -> Optional[x509.Certificate]:
+        """Find a certificate by serial number in the certificate directory"""
+        serial_hex = format(serial_number, 'x').upper()
+        
+        # Search in common locations
+        search_paths = [
+            f"{self.cert_dir}/hosts/*/cert.pem",
+            f"{self.cert_dir}/emails/*/cert.pem",
+            f"{self.cert_dir}/smime/*/cert.pem",
+            f"{self.cert_dir}/*.pem",
+        ]
+        
+        import glob
+        for pattern in search_paths:
+            for cert_path in glob.glob(pattern):
+                try:
+                    with open(cert_path, 'rb') as f:
+                        cert_pem = f.read()
+                        cert = x509.load_pem_x509_certificate(cert_pem)
+                        if format(cert.serial_number, 'x').upper() == serial_hex:
+                            return cert
+                except Exception:
+                    continue
+        return None
+    
     def create_ocsp_response(self, ocsp_request_der: bytes) -> bytes:
         """Create OCSP response for the given request"""
         try:
             # Parse OCSP request
             ocsp_req = ocsp.load_der_ocsp_request(ocsp_request_der)
             
-            # Get the certificate serial number from the request
+            # Get the certificate serial number and hash algorithm from request
             cert_serial = ocsp_req.serial_number
+            request_hash_algorithm = ocsp_req.hash_algorithm
+            
+            # Try to find the actual certificate
+            target_cert = self.find_certificate_by_serial(cert_serial)
+            if not target_cert:
+                # Certificate not found - return unknown status
+                print(f"Certificate with serial {format(cert_serial, 'x')} not found", file=sys.stderr)
+                builder = ocsp.OCSPResponseBuilder()
+                response = builder.build_unsuccessful(ocsp.OCSPResponseStatus.INTERNAL_ERROR)
+                return response.public_bytes(serialization.Encoding.DER)
             
             # Determine issuer
             issuer_cert, issuer_key, ca_type = self.get_issuer_and_key(cert_serial)
@@ -157,63 +193,50 @@ class OCSPResponder:
             this_update = datetime.now(timezone.utc)
             next_update = this_update + timedelta(hours=24)
             
+            # Add response based on certificate status
+            # Use the hash algorithm from the request for certificate ID
+            # but sign with SHA256 for security
             if cert_status == 'revoked':
                 # Certificate is revoked
                 builder = builder.add_response(
-                    cert=x509.CertificateBuilder().subject_name(
-                        x509.Name([])
-                    ).issuer_name(
-                        issuer_cert.subject
-                    ).public_key(
-                        issuer_cert.public_key()
-                    ).serial_number(
-                        cert_serial
-                    ).not_valid_before(
-                        datetime.now(timezone.utc)
-                    ).not_valid_after(
-                        datetime.now(timezone.utc) + timedelta(days=1)
-                    ).sign(issuer_key, hashes.SHA256(), default_backend()),
-                    issuer=issuer_cert,
-                    algorithm=hashes.SHA256(),
+                    cert=target_cert,  # The certificate being validated
+                    issuer=issuer_cert,  # Its issuer
+                    algorithm=request_hash_algorithm,  # Use request's hash algorithm
                     cert_status=ocsp.OCSPCertStatus.REVOKED,
                     this_update=this_update,
                     next_update=next_update,
                     revocation_time=revoked_info['revocation_time'],
                     revocation_reason=revoked_info['reason']
-                ).responder_id(
-                    ocsp.OCSPResponderEncoding.HASH, issuer_cert
                 )
             else:
                 # Certificate is good
                 builder = builder.add_response(
-                    cert=x509.CertificateBuilder().subject_name(
-                        x509.Name([])
-                    ).issuer_name(
-                        issuer_cert.subject
-                    ).public_key(
-                        issuer_cert.public_key()
-                    ).serial_number(
-                        cert_serial
-                    ).not_valid_before(
-                        datetime.now(timezone.utc)
-                    ).not_valid_after(
-                        datetime.now(timezone.utc) + timedelta(days=1)
-                    ).sign(issuer_key, hashes.SHA256(), default_backend()),
-                    issuer=issuer_cert,
-                    algorithm=hashes.SHA256(),
+                    cert=target_cert,  # The certificate being validated
+                    issuer=issuer_cert,  # Its issuer
+                    algorithm=request_hash_algorithm,  # Use request's hash algorithm
                     cert_status=ocsp.OCSPCertStatus.GOOD,
                     this_update=this_update,
-                    next_update=next_update
-                ).responder_id(
-                    ocsp.OCSPResponderEncoding.HASH, issuer_cert
+                    next_update=next_update,
+                    revocation_time=None,
+                    revocation_reason=None
                 )
             
+            # Set responder ID and sign
+            builder = builder.responder_id(
+                ocsp.OCSPResponderEncoding.HASH, issuer_cert
+            )
+            
             # Sign and build response
-            response = builder.sign(issuer_key, hashes.SHA256())
+            # Use SHA256 for signing if request uses SHA1 (insecure)
+            # Otherwise use the request's hash algorithm
+            sign_algorithm = hashes.SHA256() if isinstance(request_hash_algorithm, hashes.SHA1) else request_hash_algorithm
+            response = builder.sign(issuer_key, sign_algorithm)
             return response.public_bytes(serialization.Encoding.DER)
             
         except Exception as e:
             print(f"Error creating OCSP response: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
             # Return "internal error" response
             builder = ocsp.OCSPResponseBuilder()
             response = builder.build_unsuccessful(
