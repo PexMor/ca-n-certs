@@ -12,7 +12,8 @@
                     "cert sign",
                     "crl sign",
                     "server auth",
-                    "client auth"
+                    "client auth",
+                    "email protection"
                 ],
                 "expiry": "8760h",
                 "ca_constraint": {
@@ -53,7 +54,8 @@
                 "usages": [
                     "signing",
                     "digital signature",
-                    "key encipherment"
+                    "key encipherment",
+                    "email protection"
                 ],
                 "expiry": "8760h"
             }

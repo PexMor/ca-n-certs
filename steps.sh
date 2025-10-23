@@ -479,6 +479,149 @@ function step_email() {
     x509info "$BD/smime/${FOLDER_NAME}/cert.pem"
 }
 
+function step_email_openssl() {
+    # Generate S/MIME certificate using OpenSSL directly with proper Extended Key Usage
+    # Usage: step_email_openssl "Person Name" email1@example.com [email2@example.com ...]
+    # This function creates certificates with emailProtection EKU which CFSSL cannot do
+    local NAME=$1
+    shift
+    EMAIL_ADDRESSES=$@
+    
+    # Create slugified folder name from CN
+    local FOLDER_NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | $SED 's/[^a-z0-9]/_/g' | $SED 's/__*/_/g' | $SED 's/^_//;s/_$//')
+    
+    # Create directory for this email certificate
+    mkdir -p "$BD/smime-openssl/$FOLDER_NAME"
+    
+    echo "Generating S/MIME certificate for '$NAME' using OpenSSL..."
+    echo "Email addresses: $EMAIL_ADDRESSES"
+    
+    # Check if certificate already exists
+    if [ -f "$BD/smime-openssl/${FOLDER_NAME}/cert.pem" ]; then
+        END_DATE=`openssl x509 -in "$BD/smime-openssl/${FOLDER_NAME}/cert.pem" -noout -enddate | cut -d"=" -f2`
+        END_DATE_SECS=`$DATE -d "$END_DATE" +%s`
+        NUNIXTS=`$DATE +%s`
+        if [ $END_DATE_SECS -lt $NUNIXTS ]; then
+            echo "The certificate is expired, regenerating..."
+            rm -f "$BD/smime-openssl/${FOLDER_NAME}"/*
+        else
+            echo "Valid certificate already exists at smime-openssl/${FOLDER_NAME}/cert.pem"
+            x509info "$BD/smime-openssl/${FOLDER_NAME}/cert.pem"
+            return
+        fi
+    fi
+    
+    # Build Subject Alternative Name string with email addresses
+    SAN_EMAILS=""
+    for email in $EMAIL_ADDRESSES; do
+        if [ -z "$SAN_EMAILS" ]; then
+            SAN_EMAILS="email:${email}"
+        else
+            SAN_EMAILS="${SAN_EMAILS},email:${email}"
+        fi
+    done
+    
+    # Create OpenSSL config file for this certificate
+    cat > "$BD/smime-openssl/${FOLDER_NAME}/openssl.cnf" << EOF
+# OpenSSL configuration for S/MIME certificate generation
+# Generated: $(date)
+
+[ req ]
+default_bits        = 2048
+default_md          = sha256
+default_keyfile     = key.pem
+prompt              = no
+encrypt_key         = no
+distinguished_name  = req_dn
+req_extensions      = v3_req
+
+[ req_dn ]
+C                   = CZ
+ST                  = Heart of Europe
+L                   = Prague
+O                   = At Home Company
+OU                  = Security Dept.
+CN                  = ${NAME}
+
+[ v3_req ]
+# Extensions for S/MIME certificate
+keyUsage            = critical, digitalSignature, keyEncipherment
+extendedKeyUsage    = emailProtection
+subjectAltName      = ${SAN_EMAILS}
+basicConstraints    = critical, CA:FALSE
+subjectKeyIdentifier = hash
+
+[ v3_ca ]
+# Extensions for signing (CA perspective)
+keyUsage            = critical, digitalSignature, keyEncipherment
+extendedKeyUsage    = emailProtection
+subjectAltName      = ${SAN_EMAILS}
+basicConstraints    = critical, CA:FALSE
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+EOF
+    
+    # Generate private key
+    echo "Generating private key..."
+    openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 \
+        -out "$BD/smime-openssl/${FOLDER_NAME}/key.pem" 2>/dev/null
+    
+    # Generate Certificate Signing Request (CSR)
+    echo "Generating Certificate Signing Request..."
+    openssl req -new \
+        -key "$BD/smime-openssl/${FOLDER_NAME}/key.pem" \
+        -out "$BD/smime-openssl/${FOLDER_NAME}/email.csr" \
+        -config "$BD/smime-openssl/${FOLDER_NAME}/openssl.cnf" 2>/dev/null
+    
+    # Sign the certificate with Intermediate CA
+    echo "Signing certificate with Intermediate CA..."
+    openssl x509 -req \
+        -in "$BD/smime-openssl/${FOLDER_NAME}/email.csr" \
+        -CA "$BD/ica-ca.pem" \
+        -CAkey "$BD/ica-key.pem" \
+        -CAcreateserial \
+        -out "$BD/smime-openssl/${FOLDER_NAME}/cert.pem" \
+        -days 265 \
+        -sha384 \
+        -extfile "$BD/smime-openssl/${FOLDER_NAME}/openssl.cnf" \
+        -extensions v3_ca 2>/dev/null
+    
+    # Create certificate bundles
+    cat "$BD/smime-openssl/${FOLDER_NAME}/cert.pem" "$BD/ica-ca.pem" > "$BD/smime-openssl/${FOLDER_NAME}/bundle-2.pem"
+    cat "$BD/smime-openssl/${FOLDER_NAME}/cert.pem" "$BD/ica-ca.pem" "$BD/ca.pem" > "$BD/smime-openssl/${FOLDER_NAME}/bundle-3.pem"
+    
+    # Create PKCS#12 file
+    P12_PASS="${EMAIL_P12_PASSWORD:-}"
+    if [ -z "$P12_PASS" ]; then
+        echo "Creating PKCS#12 file without password (use EMAIL_P12_PASSWORD env var to set password)"
+        openssl pkcs12 -export -out "$BD/smime-openssl/${FOLDER_NAME}/email.p12" \
+            -inkey "$BD/smime-openssl/${FOLDER_NAME}/key.pem" \
+            -in "$BD/smime-openssl/${FOLDER_NAME}/bundle-3.pem" \
+            -name "${NAME}" \
+            -passout pass:
+    else
+        echo "Creating PKCS#12 file with password"
+        openssl pkcs12 -export -out "$BD/smime-openssl/${FOLDER_NAME}/email.p12" \
+            -inkey "$BD/smime-openssl/${FOLDER_NAME}/key.pem" \
+            -in "$BD/smime-openssl/${FOLDER_NAME}/bundle-3.pem" \
+            -name "${NAME}" \
+            -passout pass:$P12_PASS
+    fi
+    
+    echo ""
+    echo "✓ Certificate generated successfully!"
+    echo "  Directory: $BD/smime-openssl/${FOLDER_NAME}/"
+    echo "  PKCS#12: $BD/smime-openssl/${FOLDER_NAME}/email.p12"
+    echo ""
+    
+    # Display certificate information
+    x509info "$BD/smime-openssl/${FOLDER_NAME}/cert.pem"
+    
+    echo ""
+    echo "Certificate Extensions:"
+    openssl x509 -in "$BD/smime-openssl/${FOLDER_NAME}/cert.pem" -noout -text | grep -A15 "X509v3 extensions" | sed 's/^/  /'
+}
+
 # The main script
 # Step 1 - prepare the Root CA (if not exists)
 # ususally you run this step only once (or once every 10 years = expiry date - 10%)
@@ -499,3 +642,5 @@ step02 # prepare the Intermediate CA
 step03 localhost '*.lan'
 
 step_email "John Doe" john.doe@example.com john@company.com
+
+step_email_openssl "John Extended" john.extended@example.com johne@company.com

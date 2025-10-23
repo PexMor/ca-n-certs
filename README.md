@@ -96,7 +96,7 @@ Platform binaries to be downloaded at [https://github.com/cloudflare/cfssl/relea
 **Chrome & Safari & Edge/Chrome** use the system cert store (incl.RootCA).
 
 ```bash
-export BP="$HOME/.config/demo-ssl"
+export BP="$HOME/.config/demo-cfssl"
 # following does not work with `update-ca-certificates`
 # export DST="/usr/share/ca-certificates/extra"
 export DST="/usr/local/share/ca-certificates/extra"
@@ -259,8 +259,113 @@ The email profile uses the following key usages suitable for S/MIME:
 
 Default expiry: 1 year (8760 hours)
 
+## Signing Files with Timestamps
+
+The `sign_tsa.sh` script allows you to sign files with detached signatures and add trusted timestamps from free TSA (Time Stamp Authority) servers.
+
+### Usage
+
+```bash
+# Sign with P12 file (no password)
+./sign_tsa.sh --p12 email.p12 document.pdf
+
+# Sign with P12 file (with password)
+./sign_tsa.sh --p12 email.p12 --password-file pass.txt report.pdf
+
+# Sign with separate cert and key files
+./sign_tsa.sh --cert cert.pem --key key.pem presentation.pptx
+
+# Sign multiple files
+./sign_tsa.sh --p12 email.p12 file1.pdf file2.docx file3.txt
+```
+
+### Features
+
+- Creates detached signatures in PEM format (saved as `<filename>.sign_tsa`)
+- Adds trusted timestamps from free TSA servers:
+  - FreeTSA.org (http://freetsa.org/tsr)
+  - Sectigo (http://timestamp.sectigo.com)
+  - DigiCert (http://timestamp.digicert.com)
+- Timestamp tokens saved separately as `<filename>.sign_tsa.tsr`
+- Supports both PKCS#12 (.p12) and separate PEM files
+- Password can be provided via file for automation
+- Automatically tries multiple TSA servers if one fails
+- Color-coded output for easy reading
+
+### Verification
+
+The `verify_tsa.sh` script provides easy verification of signed files:
+
+```bash
+# Simple verification (auto-detects signature file)
+./verify_tsa.sh document.pdf
+
+# Verify with certificate chain validation (uses default CA bundle)
+./verify_tsa.sh document.pdf --verify-cert
+
+# Verify with custom CA bundle
+./verify_tsa.sh document.pdf --ca-file /path/to/ca-bundle.pem --verify-cert
+```
+
+The script automatically:
+- Uses `$HOME/.config/demo-cfssl/ca-bundle-complete.pem` as default CA bundle
+- Verifies the CMS signature
+- Checks for and verifies timestamp (if .tsr file exists)
+- Displays signer and certificate information
+- Provides clear pass/fail status
+
+**Manual verification with OpenSSL:**
+
+```bash
+# Verify signature (without checking certificate validity)
+openssl cms -verify -in document.pdf.sign_tsa -inform PEM -content document.pdf -noverify
+
+# Verify with certificate chain
+openssl cms -verify -in document.pdf.sign_tsa -inform PEM -content document.pdf -CAfile ca-bundle.pem
+
+# Verify timestamp (if .tsr file exists)
+openssl ts -verify -in document.pdf.sign_tsa.tsr -data document.pdf -CAfile ca-bundle.pem
+```
+
+Note: The signature files are in PEM format (text-based, base64 encoded) for better portability. 
+Timestamp tokens are saved as separate `.tsr` files and can be verified independently.
+
+### Building Complete CA Bundle
+
+To verify signatures and timestamps, you need a CA bundle that combines your custom CAs with system trusted CAs:
+
+```bash
+# Build the combined CA bundle
+./build_ca_bundle.sh
+
+# This creates: $HOME/.config/demo-cfssl/ca-bundle-complete.pem
+# Contains: Your Root CA + Intermediate CA + System trusted CAs
+```
+
+The combined bundle is needed for:
+- Verifying your own certificate signatures with chain validation
+- Verifying TSA timestamps (TSA certificates are signed by public CAs)
+
+### Example Workflow
+
+```bash
+# 1. Generate email certificate
+step_email "John Doe" john.doe@example.com
+
+# 2. Build CA bundle (one time, or after CA changes)
+./build_ca_bundle.sh
+
+# 3. Sign a document
+./sign_tsa.sh --p12 $HOME/.config/demo-cfssl/smime/john_doe/email.p12 important-document.pdf
+
+# 4. Verify the signature (basic - no chain validation)
+./verify_tsa.sh important-document.pdf
+
+# 5. Verify with certificate chain validation (recommended)
+./verify_tsa.sh important-document.pdf --verify-cert
+```
+
 ## To-Dos
 
-- TSA/TSP (Time Stamping Authority/Protocol)
 - OCSP (Online Certificate Status Protocol)
 - CRL (Certificate Revocation List)

@@ -1,2 +1,4 @@
 tmp-*
 tmp/
+*.sign_tsa
+*.sign_tsa.tsr
