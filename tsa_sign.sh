@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# sign_tsa.sh - Sign files with detached signature and TSA timestamp
+# tsa_sign.sh - Sign files with detached signature and TSA timestamp
 #
 # Usage:
-#   sign_tsa.sh --p12 <file.p12> [--password-file <pass.txt>] <file1> [file2 ...]
-#   sign_tsa.sh --cert <cert.pem> --key <key.pem> <file1> [file2 ...]
+#   tsa_sign.sh --p12 <file.p12> [--password-file <pass.txt>] <file1> [file2 ...]
+#   tsa_sign.sh --cert <cert.pem> --key <key.pem> <file1> [file2 ...]
 #
 # This script signs files using S/MIME certificates and adds a trusted timestamp
 # from a free Time Stamp Authority (TSA). The detached signature is saved as

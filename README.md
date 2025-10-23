@@ -261,22 +261,22 @@ Default expiry: 1 year (8760 hours)
 
 ## Signing Files with Timestamps
 
-The `sign_tsa.sh` script allows you to sign files with detached signatures and add trusted timestamps from free TSA (Time Stamp Authority) servers.
+The `tsa_sign.sh` script allows you to sign files with detached signatures and add trusted timestamps from free TSA (Time Stamp Authority) servers.
 
 ### Usage
 
 ```bash
 # Sign with P12 file (no password)
-./sign_tsa.sh --p12 email.p12 document.pdf
+./tsa_sign.sh --p12 email.p12 document.pdf
 
 # Sign with P12 file (with password)
-./sign_tsa.sh --p12 email.p12 --password-file pass.txt report.pdf
+./tsa_sign.sh --p12 email.p12 --password-file pass.txt report.pdf
 
 # Sign with separate cert and key files
-./sign_tsa.sh --cert cert.pem --key key.pem presentation.pptx
+./tsa_sign.sh --cert cert.pem --key key.pem presentation.pptx
 
 # Sign multiple files
-./sign_tsa.sh --p12 email.p12 file1.pdf file2.docx file3.txt
+./tsa_sign.sh --p12 email.p12 file1.pdf file2.docx file3.txt
 ```
 
 ### Features
@@ -294,20 +294,21 @@ The `sign_tsa.sh` script allows you to sign files with detached signatures and a
 
 ### Verification
 
-The `verify_tsa.sh` script provides easy verification of signed files:
+The `tsa_verify.sh` script provides easy verification of signed files:
 
 ```bash
 # Simple verification (auto-detects signature file)
-./verify_tsa.sh document.pdf
+./tsa_verify.sh document.pdf
 
 # Verify with certificate chain validation (uses default CA bundle)
-./verify_tsa.sh document.pdf --verify-cert
+./tsa_verify.sh document.pdf --verify-cert
 
 # Verify with custom CA bundle
-./verify_tsa.sh document.pdf --ca-file /path/to/ca-bundle.pem --verify-cert
+./tsa_verify.sh document.pdf --ca-file /path/to/ca-bundle.pem --verify-cert
 ```
 
 The script automatically:
+
 - Uses `$HOME/.config/demo-cfssl/ca-bundle-complete.pem` as default CA bundle
 - Verifies the CMS signature
 - Checks for and verifies timestamp (if .tsr file exists)
@@ -327,7 +328,7 @@ openssl cms -verify -in document.pdf.sign_tsa -inform PEM -content document.pdf 
 openssl ts -verify -in document.pdf.sign_tsa.tsr -data document.pdf -CAfile ca-bundle.pem
 ```
 
-Note: The signature files are in PEM format (text-based, base64 encoded) for better portability. 
+Note: The signature files are in PEM format (text-based, base64 encoded) for better portability.
 Timestamp tokens are saved as separate `.tsr` files and can be verified independently.
 
 ### Building Complete CA Bundle
@@ -343,6 +344,7 @@ To verify signatures and timestamps, you need a CA bundle that combines your cus
 ```
 
 The combined bundle is needed for:
+
 - Verifying your own certificate signatures with chain validation
 - Verifying TSA timestamps (TSA certificates are signed by public CAs)
 
@@ -356,16 +358,151 @@ step_email "John Doe" john.doe@example.com
 ./build_ca_bundle.sh
 
 # 3. Sign a document
-./sign_tsa.sh --p12 $HOME/.config/demo-cfssl/smime/john_doe/email.p12 important-document.pdf
+./tsa_sign.sh --p12 $HOME/.config/demo-cfssl/smime/john_doe/email.p12 important-document.pdf
 
 # 4. Verify the signature (basic - no chain validation)
-./verify_tsa.sh important-document.pdf
+./tsa_verify.sh important-document.pdf
 
 # 5. Verify with certificate chain validation (recommended)
-./verify_tsa.sh important-document.pdf --verify-cert
+./tsa_verify.sh important-document.pdf --verify-cert
 ```
+
+## Certificate Revocation List (CRL) Management
+
+The `crl_mk.sh` script provides comprehensive CRL management for both the Root CA and Intermediate CA.
+
+### Quick Start
+
+```bash
+# Revoke a compromised certificate
+./crl_mk.sh revoke ~/.config/demo-cfssl/hosts/localhost/cert.pem keyCompromise
+
+# Generate the updated CRL
+./crl_mk.sh generate ica
+
+# List all revoked certificates
+./crl_mk.sh list ica
+
+# View CRL information (validity, expiration, etc.)
+./crl_mk.sh info ica
+
+# Verify a certificate against the CRL
+./crl_mk.sh verify ~/.config/demo-cfssl/hosts/localhost/cert.pem ica
+
+# Or use the dedicated checking tool
+./crl_check.sh ~/.config/demo-cfssl/hosts/localhost/cert.pem
+```
+
+### Revocation Reasons
+
+When revoking a certificate, you can specify a reason:
+
+- `unspecified` - Default reason
+- `keyCompromise` - Private key has been compromised
+- `CACompromise` - CA key has been compromised
+- `affiliationChanged` - Certificate holder changed organization
+- `superseded` - Certificate has been replaced
+- `cessationOfOperation` - Service no longer exists
+- `certificateHold` - Temporarily revoked
+
+### CRL Files
+
+After generating a CRL, you'll find:
+
+| File name     | Purpose                                    |
+| ------------- | ------------------------------------------ |
+| ica-crl.pem   | Intermediate CA CRL in PEM format          |
+| ica-crl.der   | Intermediate CA CRL in DER format          |
+| ca-crl.pem    | Root CA CRL in PEM format (if needed)      |
+| ca-crl.der    | Root CA CRL in DER format (if needed)      |
+| crl/ica/      | Intermediate CA revocation database        |
+| crl/ca/       | Root CA revocation database                |
+
+### Testing CRL Functionality
+
+Run the included test script to see CRL management in action:
+
+```bash
+./crl_test.sh
+```
+
+This script demonstrates:
+- Generating an initial CRL
+- Revoking a certificate
+- Updating the CRL
+- Verifying revocation status
+- Listing revoked certificates
+
+### CRL Maintenance
+
+CRLs expire after 30 days by default. Set up a cron job to regenerate them:
+
+```bash
+# Regenerate Intermediate CA CRL every Monday at 2 AM
+0 2 * * 1 /path/to/demo-cfssl/crl_mk.sh generate ica
+```
+
+### Integration with Web Servers
+
+**HAProxy:**
+```haproxy
+frontend https_front
+    bind *:443 ssl crt /path/to/certs/ ca-file ca-bundle.pem crl-file ica-crl.pem verify required
+```
+
+**Nginx:**
+```nginx
+server {
+    listen 443 ssl;
+    ssl_client_certificate /path/to/ca-bundle.pem;
+    ssl_crl /path/to/ica-crl.pem;
+    ssl_verify_client on;
+}
+```
+
+**Apache:**
+```apache
+SSLCACertificateFile /path/to/ca-bundle.pem
+SSLCARevocationFile /path/to/ica-crl.pem
+SSLVerifyClient require
+```
+
+For complete documentation, see [CRL_MANAGEMENT.md](CRL_MANAGEMENT.md).
+
+### Certificate Revocation Checking
+
+The `crl_check.sh` script provides a dedicated tool for checking certificate validity:
+
+```bash
+# Basic check
+./crl_check.sh /path/to/certificate.pem
+
+# Verbose mode with full details
+./crl_check.sh cert.pem --verbose
+
+# JSON output for automation
+./crl_check.sh cert.pem --json
+
+# Batch check multiple certificates
+cat > certs-to-check.txt << EOF
+~/.config/demo-cfssl/hosts/server1/cert.pem
+~/.config/demo-cfssl/hosts/server2/cert.pem
+~/.config/demo-cfssl/smime-openssl/john_doe/cert.pem
+EOF
+
+./crl_check.sh --batch certs-to-check.txt
+```
+
+**Features:**
+- Auto-detects appropriate CRL (Root CA vs Intermediate CA)
+- Multiple output formats: normal, verbose, quiet, JSON
+- Batch checking mode for multiple certificates
+- Exit codes: 0 (valid), 1 (revoked), 2 (error)
+- Detailed certificate information display
+- Suitable for scripting and automation
 
 ## To-Dos
 
 - OCSP (Online Certificate Status Protocol)
-- CRL (Certificate Revocation List)
+- OCSP Stapling integration
+- Automated CRL distribution (HTTP/HTTPS endpoint)

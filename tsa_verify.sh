@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# verify_tsa.sh - Verify detached signatures and TSA timestamps
+# tsa_verify.sh - Verify detached signatures and TSA timestamps
 #
 # Usage:
-#   verify_tsa.sh <original_file> [signature_file]
-#   verify_tsa.sh --help
+#   tsa_verify.sh <original_file> [signature_file]
+#   tsa_verify.sh --help
 #
 # If signature_file is not provided, assumes <original_file>.sign_tsa
 # If timestamp file exists (<signature_file>.tsr), it will be verified too
