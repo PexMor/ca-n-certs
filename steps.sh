@@ -189,7 +189,8 @@ JSON_PROFILES=`cat <<EOF
                 "usages": [
                     "signing",
                     "digital signature",
-                    "key encipherment"
+                    "key encipherment",
+                    "client auth"
                 ],
                 "expiry": "${EMAIL_EXPIRY}h"
             }
@@ -622,6 +623,160 @@ EOF
     openssl x509 -in "$BD/smime-openssl/${FOLDER_NAME}/cert.pem" -noout -text | grep -A15 "X509v3 extensions" | sed 's/^/  /'
 }
 
+function step_tls_client() {
+    # Generate TLS client certificate using OpenSSL with proper Extended Key Usage
+    # Usage: step_tls_client "Client Name" [email@example.com]
+    # This function creates certificates with clientAuth EKU for TLS client authentication
+    local NAME=$1
+    local EMAIL=${2:-""}
+    
+    # Create slugified folder name from CN
+    local FOLDER_NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | $SED 's/[^a-z0-9]/_/g' | $SED 's/__*/_/g' | $SED 's/^_//;s/_$//')
+    
+    # Create directory for this TLS client certificate
+    mkdir -p "$BD/tls-clients/$FOLDER_NAME"
+    
+    echo "Generating TLS client certificate for '$NAME' using OpenSSL..."
+    if [ -n "$EMAIL" ]; then
+        echo "Email address: $EMAIL"
+    fi
+    
+    # Check if certificate already exists
+    if [ -f "$BD/tls-clients/${FOLDER_NAME}/cert.pem" ]; then
+        END_DATE=`openssl x509 -in "$BD/tls-clients/${FOLDER_NAME}/cert.pem" -noout -enddate | cut -d"=" -f2`
+        END_DATE_SECS=`$DATE -d "$END_DATE" +%s`
+        NUNIXTS=`$DATE +%s`
+        if [ $END_DATE_SECS -lt $NUNIXTS ]; then
+            echo "The certificate is expired, regenerating..."
+            rm -f "$BD/tls-clients/${FOLDER_NAME}"/*
+        else
+            echo "Valid certificate already exists at tls-clients/${FOLDER_NAME}/cert.pem"
+            x509info "$BD/tls-clients/${FOLDER_NAME}/cert.pem"
+            return
+        fi
+    fi
+    
+    # Build Subject Alternative Name string
+    SAN_STRING=""
+    if [ -n "$EMAIL" ]; then
+        SAN_STRING="email:${EMAIL}"
+    fi
+    
+    # Create OpenSSL config file for this certificate
+    cat > "$BD/tls-clients/${FOLDER_NAME}/openssl.cnf" << EOF
+# OpenSSL configuration for TLS client certificate generation
+# Generated: $(date)
+
+[ req ]
+default_bits        = 2048
+default_md          = sha256
+default_keyfile     = key.pem
+prompt              = no
+encrypt_key         = no
+distinguished_name  = req_dn
+req_extensions      = v3_req
+
+[ req_dn ]
+C                   = CZ
+ST                  = Heart of Europe
+L                   = Prague
+O                   = At Home Company
+OU                  = Security Dept.
+CN                  = ${NAME}
+$([ -n "$EMAIL" ] && echo "emailAddress        = ${EMAIL}")
+
+[ v3_req ]
+# Extensions for TLS client certificate
+keyUsage            = critical, digitalSignature, keyEncipherment
+extendedKeyUsage    = clientAuth
+$([ -n "$SAN_STRING" ] && echo "subjectAltName      = ${SAN_STRING}")
+basicConstraints    = critical, CA:FALSE
+subjectKeyIdentifier = hash
+
+[ v3_ca ]
+# Extensions for signing (CA perspective)
+keyUsage            = critical, digitalSignature, keyEncipherment
+extendedKeyUsage    = clientAuth
+$([ -n "$SAN_STRING" ] && echo "subjectAltName      = ${SAN_STRING}")
+basicConstraints    = critical, CA:FALSE
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+EOF
+    
+    # Generate private key
+    echo "Generating private key..."
+    openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 \
+        -out "$BD/tls-clients/${FOLDER_NAME}/key.pem" 2>/dev/null
+    
+    # Generate Certificate Signing Request (CSR)
+    echo "Generating Certificate Signing Request..."
+    openssl req -new \
+        -key "$BD/tls-clients/${FOLDER_NAME}/key.pem" \
+        -out "$BD/tls-clients/${FOLDER_NAME}/client.csr" \
+        -config "$BD/tls-clients/${FOLDER_NAME}/openssl.cnf" 2>/dev/null
+    
+    # Sign the certificate with Intermediate CA
+    echo "Signing certificate with Intermediate CA..."
+    openssl x509 -req \
+        -in "$BD/tls-clients/${FOLDER_NAME}/client.csr" \
+        -CA "$BD/ica-ca.pem" \
+        -CAkey "$BD/ica-key.pem" \
+        -CAcreateserial \
+        -out "$BD/tls-clients/${FOLDER_NAME}/cert.pem" \
+        -days 265 \
+        -sha384 \
+        -extfile "$BD/tls-clients/${FOLDER_NAME}/openssl.cnf" \
+        -extensions v3_ca 2>/dev/null
+    
+    # Create certificate bundles
+    cat "$BD/tls-clients/${FOLDER_NAME}/cert.pem" "$BD/ica-ca.pem" > "$BD/tls-clients/${FOLDER_NAME}/bundle-2.pem"
+    cat "$BD/tls-clients/${FOLDER_NAME}/cert.pem" "$BD/ica-ca.pem" "$BD/ca.pem" > "$BD/tls-clients/${FOLDER_NAME}/bundle-3.pem"
+    
+    # Create PKCS#12 file
+    P12_PASS="${TLS_CLIENT_P12_PASSWORD:-}"
+    if [ -z "$P12_PASS" ]; then
+        echo "Creating PKCS#12 file without password (use TLS_CLIENT_P12_PASSWORD env var to set password)"
+        openssl pkcs12 -export -out "$BD/tls-clients/${FOLDER_NAME}/client.p12" \
+            -inkey "$BD/tls-clients/${FOLDER_NAME}/key.pem" \
+            -in "$BD/tls-clients/${FOLDER_NAME}/bundle-3.pem" \
+            -name "${NAME}" \
+            -passout pass:
+    else
+        echo "Creating PKCS#12 file with password"
+        openssl pkcs12 -export -out "$BD/tls-clients/${FOLDER_NAME}/client.p12" \
+            -inkey "$BD/tls-clients/${FOLDER_NAME}/key.pem" \
+            -in "$BD/tls-clients/${FOLDER_NAME}/bundle-3.pem" \
+            -name "${NAME}" \
+            -passout pass:$P12_PASS
+    fi
+    
+    echo ""
+    echo -e "${GREEN}✓ TLS client certificate generated successfully!${COFF}"
+    echo "  Directory: $BD/tls-clients/${FOLDER_NAME}/"
+    echo "  Certificate: $BD/tls-clients/${FOLDER_NAME}/cert.pem"
+    echo "  Private Key: $BD/tls-clients/${FOLDER_NAME}/key.pem"
+    echo "  PKCS#12: $BD/tls-clients/${FOLDER_NAME}/client.p12"
+    echo ""
+    
+    # Display certificate information
+    x509info "$BD/tls-clients/${FOLDER_NAME}/cert.pem"
+    
+    echo ""
+    echo "Certificate Extensions:"
+    openssl x509 -in "$BD/tls-clients/${FOLDER_NAME}/cert.pem" -noout -text | grep -A15 "X509v3 extensions" | sed 's/^/  /'
+    
+    echo ""
+    echo -e "${AZURE}Usage:${COFF}"
+    echo "  # With curl:"
+    echo "  curl --cacert $BD/ca-bundle-myca.pem \\"
+    echo "       --cert $BD/tls-clients/${FOLDER_NAME}/cert.pem \\"
+    echo "       --key $BD/tls-clients/${FOLDER_NAME}/key.pem \\"
+    echo "       https://your-mtls-server:8444/"
+    echo ""
+    echo "  # Import PKCS#12 into browser:"
+    echo "  $BD/tls-clients/${FOLDER_NAME}/client.p12"
+}
+
 # The main script
 # Step 1 - prepare the Root CA (if not exists)
 # ususally you run this step only once (or once every 10 years = expiry date - 10%)
@@ -640,6 +795,8 @@ step02 # prepare the Intermediate CA
 # note the first argument is the common name (CN) and the rest are alternative names
 # CN is also the name of the file where the certificate will be stored
 step03 localhost '*.lan'
+
+step_tls_client "John TLS Client" john@example.com
 
 step_email "John Doe" john.doe@example.com john@company.com
 

@@ -1,0 +1,24 @@
+services:
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: demo-nginx
+    ports:
+      - "8443:8443"
+      - "8444:8444"
+    volumes:
+      # Mount server certificates
+      - ${DEMO_CFSSL_DIR:-$HOME/.config/demo-cfssl}/hosts/localhost:/server-certs:ro
+      # Mount CA bundle for client cert verification
+      - ${DEMO_CFSSL_DIR:-$HOME/.config/demo-cfssl}/ca-bundle-myca.pem:/ca-bundle.pem:ro
+    environment:
+      - TZ=UTC
+    restart: unless-stopped
+    networks:
+      - nginx-demo
+
+networks:
+  nginx-demo:
+    driver: bridge
+

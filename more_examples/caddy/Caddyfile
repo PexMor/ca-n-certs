@@ -1,0 +1,76 @@
+{
+    # Global options
+    admin off
+    auto_https off
+}
+
+# Server configuration
+https://localhost:8443 {
+    # TLS configuration with our custom certificates
+    tls /server-certs/bundle-3.pem /server-certs/key.pem {
+        # Load CA bundle for client certificate verification
+        # Note: mode 'request' asks for client cert but doesn't require it
+        # This allows us to have both protected and unprotected endpoints
+        client_auth {
+            mode request
+            trusted_ca_cert_file /ca-bundle.pem
+        }
+    }
+
+    # Root directory for serving files
+    root * /srv/www
+
+    # Standard endpoint (no client cert required)
+    route / {
+        file_server
+        try_files index.html
+    }
+
+    # Client certificate endpoint
+    # Note: With 'mode request', the server accepts connections with or without client certs
+    # The response shows client certificate details when provided
+    # For strict mTLS enforcement, use 'mode require' or a separate server block
+    route /client {
+        respond "<!DOCTYPE html>
+<html>
+<head>
+    <title>Client Cert Authentication Success</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 40px; background: #f0f0f0; }}
+        .container {{ background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        h1 {{ color: #2c5aa0; }}
+        .info {{ background: #e8f4f8; padding: 15px; border-radius: 4px; margin: 20px 0; }}
+        .label {{ font-weight: bold; color: #333; }}
+        .value {{ color: #555; margin-left: 10px; }}
+    </style>
+</head>
+<body>
+    <div class='container'>
+        <h1>✓ Client Certificate Authentication Success!</h1>
+        <p>You have successfully authenticated using your client certificate.</p>
+        <div class='info'>
+            <p><span class='label'>Subject:</span><span class='value'>{http.request.tls.client.subject}</span></p>
+            <p><span class='label'>Issuer:</span><span class='value'>{http.request.tls.client.issuer}</span></p>
+            <p><span class='label'>Serial:</span><span class='value'>{http.request.tls.client.serial}</span></p>
+            <p><span class='label'>Not Before:</span><span class='value'>{http.request.tls.client.not_before}</span></p>
+            <p><span class='label'>Not After:</span><span class='value'>{http.request.tls.client.not_after}</span></p>
+        </div>
+        <p><a href='/'>← Back to home</a></p>
+        <p><em>Note: If certificate fields above are empty, no client certificate was provided.</em></p>
+    </div>
+</body>
+</html>" 200
+    }
+
+    # Health check endpoint
+    route /health {
+        respond "OK" 200
+    }
+
+    # Log requests
+    log {
+        output stdout
+        format console
+    }
+}
+

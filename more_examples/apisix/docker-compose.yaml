@@ -1,0 +1,60 @@
+services:
+  etcd:
+    image: gcr.io/etcd-development/etcd:v3.5.16
+    container_name: demo-apisix-etcd
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd0
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --initial-cluster=etcd0=http://etcd:2380
+      - --initial-cluster-token=etcd-cluster
+      - --initial-cluster-state=new
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    networks:
+      - apisix-demo
+    volumes:
+      - etcd-data:/etcd-data
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    environment:
+      - ETCDCTL_API=3
+
+  apisix:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: demo-apisix
+    ports:
+      - "9443:9443"
+      - "9444:9444"
+      - "9180:9180"
+    volumes:
+      - ./config.yaml:/usr/local/apisix/conf/config.yaml
+      - ./setup-routes.sh:/setup-routes.sh:ro
+      - ${DEMO_CFSSL_DIR:-$HOME/.config/demo-cfssl}/hosts/localhost:/server-certs:ro
+      - ${DEMO_CFSSL_DIR:-$HOME/.config/demo-cfssl}/ca-bundle-myca.pem:/ca-bundle.pem:ro
+    environment:
+      - TZ=UTC
+    depends_on:
+      etcd:
+        condition: service_healthy
+    networks:
+      - apisix-demo
+    restart: unless-stopped
+
+networks:
+  apisix-demo:
+    driver: bridge
+
+volumes:
+  etcd-data:
+

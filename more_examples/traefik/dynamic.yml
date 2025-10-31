@@ -1,0 +1,49 @@
+# Traefik Dynamic Configuration
+
+http:
+  routers:
+    # Standard TLS router (port 8443)
+    tls-router:
+      rule: "Host(`localhost`) || HostRegexp(`^.+$`)"
+      entryPoints:
+        - web-tls
+      service: file-server
+      tls:
+        certResolver: ""
+    
+    # mTLS router (port 8444)
+    mtls-router:
+      rule: "Host(`localhost`) || HostRegexp(`^.+$`)"
+      entryPoints:
+        - web-mtls
+      service: file-server-mtls
+      tls:
+        certResolver: ""
+        options: mtls
+  
+  services:
+    # Service for standard TLS
+    file-server:
+      loadBalancer:
+        servers:
+          - url: "http://file-server:80"
+    
+    # Service for mTLS  
+    file-server-mtls:
+      loadBalancer:
+        servers:
+          - url: "http://file-server-mtls:80"
+
+tls:
+  certificates:
+    - certFile: /server-certs/bundle-3.pem
+      keyFile: /server-certs/key.pem
+  
+  options:
+    mtls:
+      minVersion: VersionTLS12
+      clientAuth:
+        caFiles:
+          - /ca-bundle.pem
+        clientAuthType: RequireAndVerifyClientCert
+

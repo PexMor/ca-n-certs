@@ -1,0 +1,41 @@
+services:
+  traefik:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: demo-traefik
+    ports:
+      - "8443:8443"
+      - "8444:8444"
+      - "8080:8080"
+    volumes:
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - ${DEMO_CFSSL_DIR:-$HOME/.config/demo-cfssl}/hosts/localhost:/server-certs:ro
+      - ${DEMO_CFSSL_DIR:-$HOME/.config/demo-cfssl}/ca-bundle-myca.pem:/ca-bundle.pem:ro
+    environment:
+      - TZ=UTC
+    networks:
+      - traefik-demo
+    restart: unless-stopped
+
+  file-server:
+    image: nginx:alpine
+    container_name: demo-traefik-files
+    volumes:
+      - ./html:/usr/share/nginx/html:ro
+    networks:
+      - traefik-demo
+
+  file-server-mtls:
+    image: nginx:alpine
+    container_name: demo-traefik-files-mtls
+    volumes:
+      - ./html-mtls:/usr/share/nginx/html:ro
+    networks:
+      - traefik-demo
+
+networks:
+  traefik-demo:
+    driver: bridge
+

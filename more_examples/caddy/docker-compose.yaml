@@ -1,0 +1,23 @@
+services:
+  caddy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: demo-caddy
+    ports:
+      - "8443:8443"
+    volumes:
+      # Mount server certificates from localhost directory
+      - ${DEMO_CFSSL_DIR:-$HOME/.config/demo-cfssl}/hosts/localhost:/server-certs:ro
+      # Mount CA bundle for client cert verification (Root CA + ICA)
+      - ${DEMO_CFSSL_DIR:-$HOME/.config/demo-cfssl}/ca-bundle-myca.pem:/ca-bundle.pem:ro
+    environment:
+      - TZ=UTC
+    restart: unless-stopped
+    networks:
+      - caddy-demo
+
+networks:
+  caddy-demo:
+    driver: bridge
+

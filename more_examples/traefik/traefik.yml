@@ -1,0 +1,38 @@
+# Traefik Static Configuration
+
+# API and Dashboard
+api:
+  dashboard: true
+  insecure: true  # For demo only - dashboard on :8080
+
+# Entry Points
+entryPoints:
+  web-tls:
+    address: ":8443"
+    http:
+      tls: {}
+  
+  web-mtls:
+    address: ":8444"
+    http:
+      tls:
+        options: mtls
+  
+  traefik:
+    address: ":8080"
+
+# Providers
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+
+# Logging
+log:
+  level: INFO
+  format: common
+
+# Access Logs
+accessLog:
+  format: common
+
