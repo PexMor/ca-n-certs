@@ -1,0 +1,12 @@
+# Core dependencies for mytsa - Pure-Python RFC 3161 Time Stamp Authority
+# Generated from pyproject.toml for pip users
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+asn1crypto>=1.5.1
+cryptography>=43.0.0
+
+# Optional development dependencies
+# Install with: pip install -r requirements.txt -r requirements-dev.txt
+# Or: pip install ".[dev]" if using pyproject.toml
+

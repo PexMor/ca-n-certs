@@ -777,6 +777,142 @@ EOF
     echo "  $BD/tls-clients/${FOLDER_NAME}/client.p12"
 }
 
+function step_tsa() {
+    # Generate TSA (Time Stamp Authority) certificate using OpenSSL with proper Extended Key Usage
+    # Usage: step_tsa "TSA_NAME"
+    # This function creates certificates with timeStamping EKU for RFC 3161 TSA operations
+    local NAME=$1
+    
+    if [ -z "$NAME" ]; then
+        echo -e "${RED}Error: TSA name is required${COFF}"
+        echo "Usage: step_tsa \"TSA_NAME\""
+        return 1
+    fi
+    
+    # Create slugified folder name from name
+    local FOLDER_NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | $SED 's/[^a-z0-9]/_/g' | $SED 's/__*/_/g' | $SED 's/^_//;s/_$//')
+    
+    # Create directory for this TSA certificate
+    mkdir -p "$BD/tsa/$FOLDER_NAME"
+    
+    echo "Generating TSA certificate for '$NAME' using OpenSSL..."
+    
+    # Check if certificate already exists
+    if [ -f "$BD/tsa/${FOLDER_NAME}/cert.pem" ]; then
+        END_DATE=`openssl x509 -in "$BD/tsa/${FOLDER_NAME}/cert.pem" -noout -enddate | cut -d"=" -f2`
+        END_DATE_SECS=`$DATE -d "$END_DATE" +%s`
+        NUNIXTS=`$DATE +%s`
+        if [ $END_DATE_SECS -lt $NUNIXTS ]; then
+            echo "The certificate is expired, regenerating..."
+            rm -f "$BD/tsa/${FOLDER_NAME}"/*
+        else
+            echo "Valid certificate already exists at tsa/${FOLDER_NAME}/cert.pem"
+            x509info "$BD/tsa/${FOLDER_NAME}/cert.pem"
+            return
+        fi
+    fi
+    
+    # Create OpenSSL config file for this certificate
+    cat > "$BD/tsa/${FOLDER_NAME}/openssl.cnf" << EOF
+# OpenSSL configuration for TSA certificate generation
+# Generated: $(date)
+# RFC 3161 Time Stamp Authority Certificate
+
+[ req ]
+default_bits        = 2048
+default_md          = sha256
+default_keyfile     = key.pem
+prompt              = no
+encrypt_key         = no
+distinguished_name  = req_dn
+req_extensions      = v3_req
+
+[ req_dn ]
+C                   = CZ
+ST                  = Heart of Europe
+L                   = Prague
+O                   = At Home Company
+OU                  = Time Stamp Authority
+CN                  = ${NAME}
+
+[ v3_req ]
+# Extensions for TSA certificate
+keyUsage            = critical, digitalSignature, nonRepudiation
+extendedKeyUsage    = critical, timeStamping
+basicConstraints    = critical, CA:FALSE
+subjectKeyIdentifier = hash
+
+[ v3_ca ]
+# Extensions for signing (CA perspective)
+keyUsage            = critical, digitalSignature, nonRepudiation
+extendedKeyUsage    = critical, timeStamping
+basicConstraints    = critical, CA:FALSE
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+EOF
+    
+    # Generate private key (ECDSA P-384 to match project defaults)
+    echo "Generating private key (ECDSA P-384)..."
+    openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 \
+        -out "$BD/tsa/${FOLDER_NAME}/key.pem" 2>/dev/null
+    
+    # Generate Certificate Signing Request (CSR)
+    echo "Generating Certificate Signing Request..."
+    openssl req -new \
+        -key "$BD/tsa/${FOLDER_NAME}/key.pem" \
+        -out "$BD/tsa/${FOLDER_NAME}/tsa.csr" \
+        -config "$BD/tsa/${FOLDER_NAME}/openssl.cnf" 2>/dev/null
+    
+    # Sign the certificate with Intermediate CA
+    echo "Signing certificate with Intermediate CA..."
+    openssl x509 -req \
+        -in "$BD/tsa/${FOLDER_NAME}/tsa.csr" \
+        -CA "$BD/ica-ca.pem" \
+        -CAkey "$BD/ica-key.pem" \
+        -CAcreateserial \
+        -out "$BD/tsa/${FOLDER_NAME}/cert.pem" \
+        -days 825 \
+        -sha384 \
+        -extfile "$BD/tsa/${FOLDER_NAME}/openssl.cnf" \
+        -extensions v3_ca 2>/dev/null
+    
+    # Create certificate bundles
+    cat "$BD/tsa/${FOLDER_NAME}/cert.pem" "$BD/ica-ca.pem" > "$BD/tsa/${FOLDER_NAME}/bundle-2.pem"
+    cat "$BD/tsa/${FOLDER_NAME}/cert.pem" "$BD/ica-ca.pem" "$BD/ca.pem" > "$BD/tsa/${FOLDER_NAME}/bundle-3.pem"
+    
+    # Initialize serial number file for TSA operations
+    echo "1000" > "$BD/tsa/${FOLDER_NAME}/tsaserial.txt"
+    echo "Initialized serial number file: $BD/tsa/${FOLDER_NAME}/tsaserial.txt"
+    
+    echo ""
+    echo -e "${GREEN}✓ TSA certificate generated successfully!${COFF}"
+    echo "  Directory: $BD/tsa/${FOLDER_NAME}/"
+    echo "  Certificate: $BD/tsa/${FOLDER_NAME}/cert.pem"
+    echo "  Private Key: $BD/tsa/${FOLDER_NAME}/key.pem"
+    echo "  Bundle (cert+ICA): $BD/tsa/${FOLDER_NAME}/bundle-2.pem"
+    echo "  Bundle (cert+ICA+Root): $BD/tsa/${FOLDER_NAME}/bundle-3.pem"
+    echo "  Serial Number File: $BD/tsa/${FOLDER_NAME}/tsaserial.txt"
+    echo ""
+    
+    # Display certificate information
+    x509info "$BD/tsa/${FOLDER_NAME}/cert.pem"
+    
+    echo ""
+    echo "Certificate Extensions:"
+    openssl x509 -in "$BD/tsa/${FOLDER_NAME}/cert.pem" -noout -text | grep -A15 "X509v3 extensions" | sed 's/^/  /'
+    
+    echo ""
+    echo -e "${AZURE}Usage:${COFF}"
+    echo "  This certificate can be used with a Time Stamp Authority (TSA) server"
+    echo "  that implements RFC 3161 Time-Stamp Protocol."
+    echo ""
+    echo "  Environment variables for TSA server:"
+    echo "  export TSA_CERT_PATH=$BD/tsa/${FOLDER_NAME}/cert.pem"
+    echo "  export TSA_KEY_PATH=$BD/tsa/${FOLDER_NAME}/key.pem"
+    echo "  export TSA_CHAIN_PATH=$BD/tsa/${FOLDER_NAME}/bundle-3.pem"
+    echo "  export TSA_SERIAL_PATH=$BD/tsa/${FOLDER_NAME}/tsaserial.txt"
+}
+
 # The main script
 # Step 1 - prepare the Root CA (if not exists)
 # ususally you run this step only once (or once every 10 years = expiry date - 10%)
@@ -801,3 +937,7 @@ step_tls_client "John TLS Client" john@example.com
 step_email "John Doe" john.doe@example.com john@company.com
 
 step_email_openssl "John Extended" john.extended@example.com johne@company.com
+
+# Step 4 - prepare TSA certificate for Time Stamp Authority
+# Usually you run this step once for your TSA server
+step_tsa "MyTSA"

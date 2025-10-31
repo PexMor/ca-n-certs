@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  mytsa:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mytsa:latest
+    container_name: mytsa-server
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount certificate directory as read-only
+      # Make sure to run steps.sh with step_tsa() before starting
+      - ~/.config/demo-cfssl/tsa:/certs:ro
+    environment:
+      # Configure TSA to use mounted certificates
+      - TSA_CERT_PATH=/certs/mytsa/cert.pem
+      - TSA_KEY_PATH=/certs/mytsa/key.pem
+      - TSA_CHAIN_PATH=/certs/mytsa/bundle-3.pem
+      - TSA_SERIAL_PATH=/certs/mytsa/tsaserial.txt
+      - TSA_POLICY_OID=1.3.6.1.4.1.13762.3
+      - TSA_ACCURACY_SECONDS=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - mytsa-network
+
+networks:
+  mytsa-network:
+    driver: bridge
+
