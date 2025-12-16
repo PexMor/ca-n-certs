@@ -913,6 +913,165 @@ EOF
     echo "  export TSA_SERIAL_PATH=$BD/tsa/${FOLDER_NAME}/tsaserial.txt"
 }
 
+function step_codesign() {
+    # Generate Code Signing certificate using OpenSSL with proper Extended Key Usage
+    # Usage: step_codesign "CODESIGN_NAME"
+    # This function creates certificates with codeSigning EKU for Authenticode signing
+    local NAME=$1
+    
+    if [ -z "$NAME" ]; then
+        echo -e "${RED}Error: Code signing certificate name is required${COFF}"
+        echo "Usage: step_codesign \"CODESIGN_NAME\""
+        return 1
+    fi
+    
+    # Create slugified folder name from name
+    local FOLDER_NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | $SED 's/[^a-z0-9]/_/g' | $SED 's/__*/_/g' | $SED 's/^_//;s/_$//')
+    
+    # Create directory for this code signing certificate
+    mkdir -p "$BD/codesign/$FOLDER_NAME"
+    
+    echo "Generating Code Signing certificate for '$NAME' using OpenSSL..."
+    
+    # Check if certificate already exists
+    if [ -f "$BD/codesign/${FOLDER_NAME}/cert.pem" ]; then
+        END_DATE=`openssl x509 -in "$BD/codesign/${FOLDER_NAME}/cert.pem" -noout -enddate | cut -d"=" -f2`
+        END_DATE_SECS=`$DATE -d "$END_DATE" +%s`
+        NUNIXTS=`$DATE +%s`
+        if [ $END_DATE_SECS -lt $NUNIXTS ]; then
+            echo "The certificate is expired, regenerating..."
+            rm -f "$BD/codesign/${FOLDER_NAME}"/*
+        else
+            echo "Valid certificate already exists at codesign/${FOLDER_NAME}/cert.pem"
+            x509info "$BD/codesign/${FOLDER_NAME}/cert.pem"
+            return
+        fi
+    fi
+    
+    # Create OpenSSL config file for this certificate
+    cat > "$BD/codesign/${FOLDER_NAME}/openssl.cnf" << EOF
+# OpenSSL configuration for Code Signing certificate generation
+# Generated: $(date)
+# Authenticode / Code Signing Certificate
+
+[ req ]
+default_bits        = 2048
+default_md          = sha256
+default_keyfile     = key.pem
+prompt              = no
+encrypt_key         = no
+distinguished_name  = req_dn
+req_extensions      = v3_req
+
+[ req_dn ]
+C                   = CZ
+ST                  = Heart of Europe
+L                   = Prague
+O                   = At Home Company
+OU                  = Development
+CN                  = ${NAME}
+
+[ v3_req ]
+# Extensions for Code Signing certificate
+keyUsage            = critical, digitalSignature
+extendedKeyUsage    = codeSigning
+basicConstraints    = critical, CA:FALSE
+subjectKeyIdentifier = hash
+
+[ v3_ca ]
+# Extensions for signing (CA perspective)
+keyUsage            = critical, digitalSignature
+extendedKeyUsage    = codeSigning
+basicConstraints    = critical, CA:FALSE
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+EOF
+    
+    # Generate private key (ECDSA P-384 to match project defaults)
+    echo "Generating private key (ECDSA P-384)..."
+    openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 \
+        -out "$BD/codesign/${FOLDER_NAME}/key.pem" 2>/dev/null
+    
+    # Generate Certificate Signing Request (CSR)
+    echo "Generating Certificate Signing Request..."
+    openssl req -new \
+        -key "$BD/codesign/${FOLDER_NAME}/key.pem" \
+        -out "$BD/codesign/${FOLDER_NAME}/codesign.csr" \
+        -config "$BD/codesign/${FOLDER_NAME}/openssl.cnf" 2>/dev/null
+    
+    # Sign the certificate with Intermediate CA
+    echo "Signing certificate with Intermediate CA..."
+    openssl x509 -req \
+        -in "$BD/codesign/${FOLDER_NAME}/codesign.csr" \
+        -CA "$BD/ica-ca.pem" \
+        -CAkey "$BD/ica-key.pem" \
+        -CAcreateserial \
+        -out "$BD/codesign/${FOLDER_NAME}/cert.pem" \
+        -days 825 \
+        -sha384 \
+        -extfile "$BD/codesign/${FOLDER_NAME}/openssl.cnf" \
+        -extensions v3_ca 2>/dev/null
+    
+    # Create certificate bundles
+    cat "$BD/codesign/${FOLDER_NAME}/cert.pem" "$BD/ica-ca.pem" > "$BD/codesign/${FOLDER_NAME}/bundle-2.pem"
+    cat "$BD/codesign/${FOLDER_NAME}/cert.pem" "$BD/ica-ca.pem" "$BD/ca.pem" > "$BD/codesign/${FOLDER_NAME}/bundle-3.pem"
+    
+    # Create PKCS#12 file for use with signing tools
+    P12_PASS="${CODESIGN_P12_PASSWORD:-}"
+    if [ -z "$P12_PASS" ]; then
+        echo "Creating PKCS#12 file without password (use CODESIGN_P12_PASSWORD env var to set password)"
+        openssl pkcs12 -export -out "$BD/codesign/${FOLDER_NAME}/codesign.p12" \
+            -inkey "$BD/codesign/${FOLDER_NAME}/key.pem" \
+            -in "$BD/codesign/${FOLDER_NAME}/bundle-3.pem" \
+            -name "${NAME}" \
+            -passout pass:
+    else
+        echo "Creating PKCS#12 file with password"
+        openssl pkcs12 -export -out "$BD/codesign/${FOLDER_NAME}/codesign.p12" \
+            -inkey "$BD/codesign/${FOLDER_NAME}/key.pem" \
+            -in "$BD/codesign/${FOLDER_NAME}/bundle-3.pem" \
+            -name "${NAME}" \
+            -passout pass:$P12_PASS
+    fi
+    
+    echo ""
+    echo -e "${GREEN}✓ Code Signing certificate generated successfully!${COFF}"
+    echo "  Directory: $BD/codesign/${FOLDER_NAME}/"
+    echo "  Certificate: $BD/codesign/${FOLDER_NAME}/cert.pem"
+    echo "  Private Key: $BD/codesign/${FOLDER_NAME}/key.pem"
+    echo "  PKCS#12: $BD/codesign/${FOLDER_NAME}/codesign.p12"
+    echo "  Bundle (cert+ICA): $BD/codesign/${FOLDER_NAME}/bundle-2.pem"
+    echo "  Bundle (cert+ICA+Root): $BD/codesign/${FOLDER_NAME}/bundle-3.pem"
+    echo ""
+    
+    # Display certificate information
+    x509info "$BD/codesign/${FOLDER_NAME}/cert.pem"
+    
+    echo ""
+    echo "Certificate Extensions:"
+    openssl x509 -in "$BD/codesign/${FOLDER_NAME}/cert.pem" -noout -text | grep -A15 "X509v3 extensions" | sed 's/^/  /'
+    
+    echo ""
+    echo -e "${AZURE}Usage with pkipy:${COFF}"
+    echo "  # Using PFX file:"
+    echo "  uv run pkipy script.ps1 --output signed.ps1 \\"
+    echo "    --pfx $BD/codesign/${FOLDER_NAME}/codesign.p12 \\"
+    echo "    --timestamp-url http://timestamp.digicert.com"
+    echo ""
+    echo "  # Using PEM files:"
+    echo "  uv run pkipy script.ps1 --output signed.ps1 \\"
+    echo "    --cert $BD/codesign/${FOLDER_NAME}/cert.pem \\"
+    echo "    --key $BD/codesign/${FOLDER_NAME}/key.pem \\"
+    echo "    --timestamp-url http://timestamp.digicert.com"
+    echo ""
+    echo -e "${AZURE}Or create config file:${COFF}"
+    echo "  mkdir -p ~/.config/pkipy"
+    echo "  cat > ~/.config/pkipy/config.yaml << EOY"
+    echo "pfx: $BD/codesign/${FOLDER_NAME}/codesign.p12"
+    echo "timestamp-url: http://timestamp.digicert.com"
+    echo "EOY"
+}
+
 # The main script
 # Step 1 - prepare the Root CA (if not exists)
 # ususally you run this step only once (or once every 10 years = expiry date - 10%)
@@ -941,3 +1100,7 @@ step_email_openssl "John Extended" john.extended@example.com johne@company.com
 # Step 4 - prepare TSA certificate for Time Stamp Authority
 # Usually you run this step once for your TSA server
 step_tsa "MyTSA"
+
+# Step 5 - prepare Code Signing certificate for Authenticode signing
+# Usually you run this step once for code signing operations
+step_codesign "MyCodeSign"

@@ -17,9 +17,12 @@ cd ocsp && ./start.sh
 - ✅ Root CA and Intermediate CA setup
 - ✅ Host/Server certificate generation (TLS/SSL)
 - ✅ S/MIME email certificates with PKCS#12 export
+- ✅ TLS client certificates for mutual TLS (mTLS)
+- ✅ Code signing certificates (Authenticode)
 - ✅ Certificate Revocation Lists (CRL)
 - ✅ OCSP Responder (RFC 6960 compliant)
 - ✅ Document signing with timestamps (TSA)
+- ✅ **PowerShell script signing** (pure Python implementation)
 - ✅ Comprehensive testing and examples
 - ✅ Docker support for all components
 
@@ -31,6 +34,7 @@ cd ocsp && ./start.sh
 - **[Production Deployment](docs/deployment.md)** - Deploy to production environments
 - **[Examples & Workflows](docs/examples.md)** - Practical examples and use cases
 - **[Troubleshooting](docs/troubleshooting.md)** - Common issues and solutions
+- **[pkipy - PowerShell Signing](pkipy/README.md)** - Pure Python Authenticode signer
 
 ## Architecture
 
@@ -48,6 +52,10 @@ demo-cfssl/
 ├── tsa_verify.sh        # Signature verification
 ├── build_ca_bundle.sh   # Build complete CA bundle
 ├── profiles.json        # Certificate profiles configuration
+├── pkipy/               # PowerShell Authenticode signer
+│   ├── __main__.py      # Pure Python signing tool
+│   ├── demo.sh          # Interactive demo
+│   └── README.md        # Complete documentation
 ├── ocsp/                # OCSP responder implementation
 │   ├── main.py          # FastAPI OCSP server
 │   ├── start.sh         # Quick start script
@@ -55,6 +63,7 @@ demo-cfssl/
 ├── haproxy/             # HAProxy example configuration
 ├── squid/               # Squid proxy example
 ├── pdf-signer/          # PDF signing tool
+├── mytsa/               # Time Stamp Authority
 └── tests/               # Test implementations
 ```
 
@@ -102,8 +111,16 @@ Or use Docker: `cfssl/cfssl`
 ## Key Commands
 
 ```bash
-# Generate certificates
+# Generate certificates (includes code signing cert)
 ./steps.sh
+
+# Generate just code signing certificate
+source steps.sh && step_codesign "MyCodeSign"
+
+# Sign PowerShell scripts (Authenticode)
+uv run pkipy script.ps1 --output signed.ps1 \
+    --pfx ~/.config/demo-cfssl/codesign/mycodesign/codesign.p12 \
+    --timestamp-url http://timestamp.digicert.com
 
 # Revoke a certificate
 ./crl_mk.sh revoke path/to/cert.pem keyCompromise

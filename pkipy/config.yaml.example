@@ -1,0 +1,28 @@
+# pkipy Configuration File Example
+# Copy this file to ~/.config/pkipy/config.yaml and customize
+
+# Certificate source - use either PFX or PEM files
+# Option 1: PFX/PKCS#12 file
+pfx: ~/.config/demo-cfssl/codesign/mycodesign/codesign.p12
+pfx-password: ""  # Leave empty if no password
+
+# Option 2: PEM files (comment out pfx if using this)
+# cert: ~/.config/demo-cfssl/codesign/mycodesign/cert.pem
+# key: ~/.config/demo-cfssl/codesign/mycodesign/key.pem
+# key-password: ""  # Leave empty if no password
+
+# RFC3161 Timestamp Server (optional but recommended)
+timestamp-url: http://timestamp.digicert.com
+
+# Alternative timestamp servers:
+# timestamp-url: http://timestamp.sectigo.com
+# timestamp-url: http://timestamp.comodoca.com
+# timestamp-url: http://timestamp.identrust.com
+# timestamp-url: http://tsa.starfieldtech.com
+
+# Note: All settings can be overridden by:
+# 1. Environment variables (prefix with PKIPY_)
+#    Example: export PKIPY_TIMESTAMP_URL=http://timestamp.digicert.com
+# 2. Command line arguments
+#    Example: uv run pkipy script.ps1 --output signed.ps1 --timestamp-url http://timestamp.digicert.com
+

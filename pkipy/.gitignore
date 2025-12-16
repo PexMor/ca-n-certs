@@ -1,0 +1,41 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Signed scripts (generated during testing)
+*-signed*.ps1
+test-script-*.ps1
+
+# Config files with passwords
+config.yaml
+config.yml
+config.toml
+
+# Certificates (should be in ~/.config/demo-cfssl/)
+*.pem
+*.p12
+*.pfx
+*.crt
+*.key
+*.csr
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
