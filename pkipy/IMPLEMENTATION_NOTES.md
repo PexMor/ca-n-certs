@@ -34,9 +34,25 @@ Added `step_codesign` function to generate Authenticode code signing certificate
 
 - **Proper EKU**: `extendedKeyUsage = codeSigning` (OID 1.3.6.1.5.5.7.3.3)
 - **Key Usage**: `digitalSignature` (critical)
-- **ECDSA P-384**: Matches project defaults
+- **RSA 3072-bit** (default): **Required for Windows Authenticode**
+- **ECDSA P-384** (optional): For non-Windows platforms only
 - **PKCS#12 export**: Creates `.p12` files for easy import
 - **Certificate bundles**: Includes full chain (cert + ICA + Root)
+
+#### Key Algorithm Choice
+
+```bash
+# RSA (default) - Required for Windows Authenticode/PowerShell
+step_codesign "MyCodeSign"
+step_codesign "MyCodeSign" rsa
+
+# ECDSA - For non-Windows platforms only (Linux/macOS verification)
+step_codesign "MyCodeSign" ecdsa
+```
+
+> ⚠️ **Windows Authenticode Limitation**: Windows' Authenticode implementation for PowerShell scripts
+> **only supports RSA** code-signing certificates. ECDSA signatures are structurally valid CMS/PKCS#7
+> but Windows will report `Status: NotSigned` for PowerShell scripts signed with ECDSA certificates.
 
 ### 3. Configuration Management
 
@@ -223,22 +239,28 @@ Import-Certificate -FilePath ica-ca.pem -CertStoreLocation Cert:\LocalMachine\CA
 
 ## Known Limitations
 
-1. **Signature Algorithm**: Currently hardcoded to RSA with PKCS#1 v1.5 padding
+1. **Windows Authenticode RSA-Only**: Windows Authenticode for PowerShell scripts **only supports RSA**
 
-   - ECDSA support requires different signature algorithm OID
-   - Can be enhanced to detect key type and use appropriate algorithm
+   - ECDSA signatures are valid CMS/PKCS#7 but Windows reports `NotSigned`
+   - The `step_codesign` function defaults to RSA for Windows compatibility
+   - Use `step_codesign "Name" ecdsa` only for non-Windows platforms
 
-2. **Timestamp Verification**: Tool creates timestamps but doesn't verify them
+2. **Signature Algorithm**: Supports both RSA (PKCS#1 v1.5) and ECDSA
+
+   - Auto-detects key type and uses appropriate algorithm
+   - RSA uses SHA-256, ECDSA uses SHA-256 for signing
+
+3. **Timestamp Verification**: Tool creates timestamps but doesn't verify them
 
    - Verification is done by PowerShell/Windows
    - Could add verification function for completeness
 
-3. **Certificate Chain**: Only includes certificates from PFX
+4. **Certificate Chain**: Only includes certificates from PFX
 
    - Could auto-discover and include full chain
    - Currently relies on PFX containing complete chain
 
-4. **Hash Algorithm**: Fixed to SHA256
+5. **Hash Algorithm**: Fixed to SHA256
    - Modern and secure, but could be made configurable
    - Would need to match in both content hash and signature
 
@@ -246,7 +268,7 @@ Import-Certificate -FilePath ica-ca.pem -CertStoreLocation Cert:\LocalMachine\CA
 
 ### Short Term
 
-- [ ] Support ECDSA signatures (detect key type)
+- [x] ~~Support ECDSA signatures (detect key type)~~ - Implemented, but Windows Authenticode is RSA-only
 - [ ] Add signature verification function
 - [ ] Support for multiple signers
 - [ ] Batch signing of multiple scripts

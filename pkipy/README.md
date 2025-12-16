@@ -32,9 +32,16 @@ First, generate a code signing certificate using the project's certificate gener
 # Source the steps.sh functions
 source steps.sh
 
-# Generate code signing certificate
+# Generate code signing certificate (RSA by default - required for Windows)
 step_codesign "MyCodeSign"
+
+# Or explicitly specify RSA
+step_codesign "MyCodeSign" rsa
 ```
+
+> ⚠️ **IMPORTANT**: Windows Authenticode for PowerShell scripts **only supports RSA certificates**.
+> ECDSA signatures are valid CMS/PKCS#7 but Windows will report "NotSigned" for PS scripts.
+> The `step_codesign` function defaults to RSA for this reason.
 
 This creates:
 
@@ -203,6 +210,27 @@ Timestamps prove when code was signed, allowing signatures to remain valid even 
 
 ## Troubleshooting
 
+### "Status: NotSigned" on Windows
+
+This almost always means you used an **ECDSA certificate** instead of RSA.
+Windows Authenticode for PowerShell scripts **only supports RSA certificates**.
+
+**Solution**: Regenerate your code signing certificate with RSA (the default):
+
+```bash
+# Remove old ECDSA certificate (if exists)
+rm -rf ~/.config/demo-cfssl/codesign/mycodesign
+
+# Generate new RSA certificate (default)
+source steps.sh
+step_codesign "MyCodeSign"
+
+# Re-sign your script
+uv run pkipy script.ps1 --output signed.ps1 \
+  --pfx ~/.config/demo-cfssl/codesign/mycodesign/codesign.p12 \
+  --timestamp-url http://timestamp.digicert.com
+```
+
 ### "Status: UnknownError" in PowerShell
 
 This usually means the certificate chain is not trusted. Solutions:
@@ -246,6 +274,17 @@ This tool integrates with the ca-n-certs project:
 1. **Certificate Generation**: Use `step_codesign` function in `steps.sh`
 2. **CA Infrastructure**: Leverages existing Root CA and Intermediate CA
 3. **Certificate Format**: Compatible with project's certificate structure
+
+### Key Algorithm Requirements
+
+| Platform                   | Algorithm    | Status                       |
+| -------------------------- | ------------ | ---------------------------- |
+| Windows (PowerShell)       | **RSA only** | ✅ Required for Authenticode |
+| Windows (PowerShell)       | ECDSA        | ❌ Reports "NotSigned"       |
+| Linux/macOS (verification) | RSA          | ✅ Supported                 |
+| Linux/macOS (verification) | ECDSA        | ✅ Supported                 |
+
+The `step_codesign` function defaults to RSA 3072-bit for Windows compatibility.
 
 ## Comparison with Other Tools
 

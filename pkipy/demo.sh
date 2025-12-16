@@ -16,15 +16,24 @@ echo -e "${BLUE}║   PowerShell Authenticode Signing Demo - pkipy             �
 echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${COFF}"
 echo
 
-# Step 1: Check if code signing certificate exists
-echo -e "${YELLOW}Step 1: Check code signing certificate${COFF}"
+# Step 1: Check if code signing certificate exists (RSA required for Windows Authenticode)
+echo -e "${YELLOW}Step 1: Check code signing certificate (RSA)${COFF}"
 if [ ! -f "$BD/codesign/mycodesign/cert.pem" ]; then
     echo -e "${RED}✗ Code signing certificate not found${COFF}"
-    echo "  Generating certificate..."
+    echo "  Generating RSA certificate (required for Windows Authenticode)..."
     cd .. && source steps.sh && step_codesign "MyCodeSign" && cd pkipy
 else
-    echo -e "${GREEN}✓ Code signing certificate exists${COFF}"
-    echo "  Location: $BD/codesign/mycodesign/"
+    # Check if existing cert is RSA or ECDSA
+    KEY_TYPE=$(openssl x509 -in "$BD/codesign/mycodesign/cert.pem" -noout -text 2>/dev/null | grep "Public Key Algorithm" | head -1)
+    if [[ "$KEY_TYPE" == *"EC"* ]] || [[ "$KEY_TYPE" == *"ec"* ]]; then
+        echo -e "${YELLOW}⚠ Existing certificate uses ECDSA (not compatible with Windows Authenticode)${COFF}"
+        echo "  Regenerating with RSA..."
+        rm -rf "$BD/codesign/mycodesign"
+        cd .. && source steps.sh && step_codesign "MyCodeSign" && cd pkipy
+    else
+        echo -e "${GREEN}✓ Code signing certificate exists (RSA)${COFF}"
+        echo "  Location: $BD/codesign/mycodesign/"
+    fi
 fi
 echo
 

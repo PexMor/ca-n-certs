@@ -145,19 +145,22 @@ def build_signeddata_for_script(
     signed_attrs_der = signed_attrs_obj.dump()
 
     # Sign based on key type
+    # Note: asn1crypto requires full algorithm names like 'sha256_rsa' not just 'rsa'
     if isinstance(signing_key, rsa.RSAPrivateKey):
         signature = signing_key.sign(
             signed_attrs_der,
             padding.PKCS1v15(),
             hashes.SHA256()
         )
-        sig_alg = algos.SignedDigestAlgorithm({'algorithm': 'rsa'})
+        # sha256_rsa = OID 1.2.840.113549.1.1.11 (sha256WithRSAEncryption)
+        sig_alg = algos.SignedDigestAlgorithm({'algorithm': 'sha256_rsa'})
     elif isinstance(signing_key, ec.EllipticCurvePrivateKey):
         signature = signing_key.sign(
             signed_attrs_der,
             ec.ECDSA(hashes.SHA256())
         )
-        sig_alg = algos.SignedDigestAlgorithm({'algorithm': 'ecdsa'})
+        # sha256_ecdsa = OID 1.2.840.10045.4.3.2 (ecdsa-with-SHA256)
+        sig_alg = algos.SignedDigestAlgorithm({'algorithm': 'sha256_ecdsa'})
     else:
         raise ValueError(f"Unsupported key type: {type(signing_key)}")
 
@@ -248,11 +251,11 @@ def add_timestamp_unsigned_attr(content_info: cms.ContentInfo, ts_token: cms.Con
 
 
 # --------------------------------------------------------
-# Embed CMS as # SIG # block into .ps1
+# Embed CMS as # SIG # block into .ps1 (bytes-based)
 # --------------------------------------------------------
 
-def embed_sig_block(script_text: str, cms_der: bytes) -> str:
-    """Embed CMS signature block into PowerShell script."""
+def build_sig_block_bytes(cms_der: bytes) -> bytes:
+    """Build the signature block as bytes (ASCII with CRLF)."""
     b64 = base64.encodebytes(cms_der).decode('ascii')
     # normalize line breaks
     lines = [line for line in b64.splitlines() if line.strip()]
@@ -262,12 +265,12 @@ def embed_sig_block(script_text: str, cms_der: bytes) -> str:
         sig_lines.append(f"# {line}")
     sig_lines.append("# SIG # End signature block")
 
-    # PowerShell usually uses CRLF
-    return script_text + "\r\n" + "\r\n".join(sig_lines) + "\r\n"
+    # PowerShell signature blocks use CRLF
+    return ("\r\n".join(sig_lines) + "\r\n").encode('ascii')
 
 
 # --------------------------------------------------------
-# High-level signing function
+# High-level signing function (bytes-based to avoid hash mismatch)
 # --------------------------------------------------------
 
 def sign_and_timestamp_ps1(
@@ -282,12 +285,31 @@ def sign_and_timestamp_ps1(
 ):
     """
     Sign a PowerShell script with Authenticode signature and optional RFC3161 timestamp.
+    
+    IMPORTANT: This function works with raw bytes to avoid hash mismatches.
+    The messageDigest in the signature must match exactly what PowerShell will hash.
     """
     print(f"Reading script: {script_path}")
-    script_text = Path(script_path).read_text(encoding="utf-8")
-    script_bytes = script_text.encode("utf-8")
-
-    # Load key + cert
+    
+    # 1) Read raw file bytes as Windows/PowerShell will see them
+    #    DO NOT use read_text() + encode() as it can alter the content!
+    raw_bytes = Path(script_path).read_bytes()
+    
+    # 2) If re-signing an already signed script, truncate at the SIG block
+    sig_marker = b"# SIG # Begin signature block"
+    marker_idx = raw_bytes.find(sig_marker)
+    if marker_idx != -1:
+        # Find the start of line containing the marker (trim trailing whitespace before it)
+        # Look backwards for the line start
+        line_start = marker_idx
+        while line_start > 0 and raw_bytes[line_start - 1:line_start] in (b'\r', b'\n', b' ', b'\t'):
+            line_start -= 1
+        unsigned_bytes = raw_bytes[:line_start]
+        print("  (Removing existing signature block)")
+    else:
+        unsigned_bytes = raw_bytes
+    
+    # 3) Load key + cert
     if pfx:
         print(f"Loading certificate from PFX: {pfx}")
         signing_key, signing_cert, chain = load_cert_key_from_pfx(pfx, pfx_password)
@@ -297,13 +319,14 @@ def sign_and_timestamp_ps1(
     else:
         raise ValueError("Either --pfx or both --cert and --key must be provided")
 
-    # Build CMS SignedData (no timestamp yet)
+    # 4) Build CMS SignedData - hash the EXACT bytes that will be in the final file
+    #    The unsigned_bytes is what we sign, and it goes unchanged into the output
     print("Building Authenticode signature...")
     content_info = build_signeddata_for_script(
-        script_bytes, signing_key, signing_cert, chain
+        unsigned_bytes, signing_key, signing_cert, chain
     )
 
-    # Add timestamp if requested
+    # 5) Add timestamp if requested
     if tsa_url:
         signed_data = content_info['content']
         signer_info = signed_data['signer_infos'][0]
@@ -317,18 +340,30 @@ def sign_and_timestamp_ps1(
         content_info = add_timestamp_unsigned_attr(content_info, ts_token)
         print("  ✓ Timestamp embedded in signature")
 
-    # Serialize to DER and embed as SIG block
+    # 6) Serialize to DER and build signature block
     print("Embedding signature block...")
     cms_der = content_info.dump()
-    signed_script = embed_sig_block(script_text, cms_der)
-
-    Path(out_path).write_text(signed_script, encoding="utf-8")
+    sig_block = build_sig_block_bytes(cms_der)
+    
+    # 7) Combine: unsigned content + CRLF separator + signature block
+    #    Ensure there's a line ending before the signature block
+    if not unsigned_bytes.endswith(b"\r\n") and not unsigned_bytes.endswith(b"\n"):
+        unsigned_bytes = unsigned_bytes + b"\r\n"
+    elif unsigned_bytes.endswith(b"\n") and not unsigned_bytes.endswith(b"\r\n"):
+        # Convert trailing LF to CRLF for consistency
+        unsigned_bytes = unsigned_bytes[:-1] + b"\r\n"
+    
+    # Final signed file = exact unsigned bytes + signature block
+    signed_bytes = unsigned_bytes + sig_block
+    
+    # 8) Write as raw bytes - no encoding conversion!
+    Path(out_path).write_bytes(signed_bytes)
     print(f"\n✓ Signed script written to: {out_path}")
     
     if tsa_url:
         print("  Signature includes RFC3161 timestamp")
     
-    print("\nVerify with PowerShell:")
+    print("\nVerify with PowerShell (Windows only):")
     print(f"  Get-AuthenticodeSignature {out_path} | Format-List *")
 
 

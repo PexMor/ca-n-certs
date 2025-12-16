@@ -915,14 +915,42 @@ EOF
 
 function step_codesign() {
     # Generate Code Signing certificate using OpenSSL with proper Extended Key Usage
-    # Usage: step_codesign "CODESIGN_NAME"
+    # Usage: step_codesign "CODESIGN_NAME" [rsa|ecdsa]
+    # 
+    # IMPORTANT: Windows Authenticode for PowerShell scripts ONLY supports RSA certificates!
+    # ECDSA signatures are valid CMS/PKCS#7 but Windows will report "NotSigned" for PS scripts.
+    # 
+    # Key Algorithm Options:
+    #   rsa   - RSA 3072-bit (default) - Required for Windows Authenticode/PowerShell
+    #   ecdsa - ECDSA P-384 - For non-Windows platforms only
+    #
     # This function creates certificates with codeSigning EKU for Authenticode signing
+    
     local NAME=$1
+    local KEY_TYPE=${2:-rsa}  # Default to RSA for Windows Authenticode compatibility
     
     if [ -z "$NAME" ]; then
         echo -e "${RED}Error: Code signing certificate name is required${COFF}"
-        echo "Usage: step_codesign \"CODESIGN_NAME\""
+        echo "Usage: step_codesign \"CODESIGN_NAME\" [rsa|ecdsa]"
+        echo ""
+        echo "Options:"
+        echo "  rsa   - RSA 3072-bit (default) - Required for Windows Authenticode"
+        echo "  ecdsa - ECDSA P-384 - For non-Windows platforms only"
         return 1
+    fi
+    
+    # Validate key type
+    if [ "$KEY_TYPE" != "rsa" ] && [ "$KEY_TYPE" != "ecdsa" ]; then
+        echo -e "${RED}Error: Invalid key type '$KEY_TYPE'. Use 'rsa' or 'ecdsa'${COFF}"
+        return 1
+    fi
+    
+    # Warn about ECDSA limitation
+    if [ "$KEY_TYPE" == "ecdsa" ]; then
+        echo -e "${YELLOW}⚠ WARNING: ECDSA code signing certificates are NOT supported by Windows Authenticode!${COFF}"
+        echo -e "${YELLOW}  PowerShell will report 'NotSigned' for scripts signed with ECDSA certificates.${COFF}"
+        echo -e "${YELLOW}  Use 'rsa' (default) for Windows compatibility.${COFF}"
+        echo ""
     fi
     
     # Create slugified folder name from name
@@ -931,7 +959,7 @@ function step_codesign() {
     # Create directory for this code signing certificate
     mkdir -p "$BD/codesign/$FOLDER_NAME"
     
-    echo "Generating Code Signing certificate for '$NAME' using OpenSSL..."
+    echo "Generating Code Signing certificate for '$NAME' using OpenSSL (key type: ${KEY_TYPE})..."
     
     # Check if certificate already exists
     if [ -f "$BD/codesign/${FOLDER_NAME}/cert.pem" ]; then
@@ -942,21 +970,42 @@ function step_codesign() {
             echo "The certificate is expired, regenerating..."
             rm -f "$BD/codesign/${FOLDER_NAME}"/*
         else
-            echo "Valid certificate already exists at codesign/${FOLDER_NAME}/cert.pem"
-            x509info "$BD/codesign/${FOLDER_NAME}/cert.pem"
-            return
+            # Check if existing cert has different key type
+            EXISTING_KEY_TYPE=$(openssl x509 -in "$BD/codesign/${FOLDER_NAME}/cert.pem" -noout -text 2>/dev/null | grep -o "Public Key Algorithm:.*" | head -1)
+            if [[ "$KEY_TYPE" == "rsa" && "$EXISTING_KEY_TYPE" == *"EC"* ]] || [[ "$KEY_TYPE" == "ecdsa" && "$EXISTING_KEY_TYPE" == *"rsaEncryption"* ]]; then
+                echo "Existing certificate uses different key algorithm, regenerating with $KEY_TYPE..."
+                rm -f "$BD/codesign/${FOLDER_NAME}"/*
+            else
+                echo "Valid certificate already exists at codesign/${FOLDER_NAME}/cert.pem"
+                x509info "$BD/codesign/${FOLDER_NAME}/cert.pem"
+                return
+            fi
         fi
+    fi
+    
+    # Set key-specific parameters
+    local KEY_BITS HASH_ALG
+    if [ "$KEY_TYPE" == "rsa" ]; then
+        KEY_BITS=3072
+        HASH_ALG=sha256
+    else
+        KEY_BITS=384
+        HASH_ALG=sha384
     fi
     
     # Create OpenSSL config file for this certificate
     cat > "$BD/codesign/${FOLDER_NAME}/openssl.cnf" << EOF
 # OpenSSL configuration for Code Signing certificate generation
 # Generated: $(date)
+# Key Type: ${KEY_TYPE}
 # Authenticode / Code Signing Certificate
+#
+# NOTE: Windows Authenticode only supports RSA for PowerShell script signing.
+# ECDSA certificates will result in "NotSigned" status on Windows.
 
 [ req ]
-default_bits        = 2048
-default_md          = sha256
+default_bits        = ${KEY_BITS}
+default_md          = ${HASH_ALG}
 default_keyfile     = key.pem
 prompt              = no
 encrypt_key         = no
@@ -987,10 +1036,16 @@ subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
 EOF
     
-    # Generate private key (ECDSA P-384 to match project defaults)
-    echo "Generating private key (ECDSA P-384)..."
-    openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 \
-        -out "$BD/codesign/${FOLDER_NAME}/key.pem" 2>/dev/null
+    # Generate private key based on key type
+    if [ "$KEY_TYPE" == "rsa" ]; then
+        echo "Generating private key (RSA ${KEY_BITS}-bit)..."
+        openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:${KEY_BITS} \
+            -out "$BD/codesign/${FOLDER_NAME}/key.pem" 2>/dev/null
+    else
+        echo "Generating private key (ECDSA P-384)..."
+        openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:secp384r1 \
+            -out "$BD/codesign/${FOLDER_NAME}/key.pem" 2>/dev/null
+    fi
     
     # Generate Certificate Signing Request (CSR)
     echo "Generating Certificate Signing Request..."
@@ -1008,7 +1063,7 @@ EOF
         -CAcreateserial \
         -out "$BD/codesign/${FOLDER_NAME}/cert.pem" \
         -days 825 \
-        -sha384 \
+        -${HASH_ALG} \
         -extfile "$BD/codesign/${FOLDER_NAME}/openssl.cnf" \
         -extensions v3_ca 2>/dev/null
     
@@ -1036,12 +1091,21 @@ EOF
     
     echo ""
     echo -e "${GREEN}✓ Code Signing certificate generated successfully!${COFF}"
+    echo "  Key Type: ${KEY_TYPE}"
     echo "  Directory: $BD/codesign/${FOLDER_NAME}/"
     echo "  Certificate: $BD/codesign/${FOLDER_NAME}/cert.pem"
     echo "  Private Key: $BD/codesign/${FOLDER_NAME}/key.pem"
     echo "  PKCS#12: $BD/codesign/${FOLDER_NAME}/codesign.p12"
     echo "  Bundle (cert+ICA): $BD/codesign/${FOLDER_NAME}/bundle-2.pem"
     echo "  Bundle (cert+ICA+Root): $BD/codesign/${FOLDER_NAME}/bundle-3.pem"
+    
+    if [ "$KEY_TYPE" == "rsa" ]; then
+        echo ""
+        echo -e "${GREEN}  ✓ RSA key - Compatible with Windows Authenticode${COFF}"
+    else
+        echo ""
+        echo -e "${YELLOW}  ⚠ ECDSA key - NOT compatible with Windows Authenticode${COFF}"
+    fi
     echo ""
     
     # Display certificate information
@@ -1103,4 +1167,7 @@ step_tsa "MyTSA"
 
 # Step 5 - prepare Code Signing certificate for Authenticode signing
 # Usually you run this step once for code signing operations
-step_codesign "MyCodeSign"
+# NOTE: RSA is the default and REQUIRED for Windows Authenticode/PowerShell scripts
+# Use: step_codesign "Name" rsa     (default - Windows compatible)
+#      step_codesign "Name" ecdsa   (non-Windows only)
+step_codesign "MyCodeSign"  # Uses RSA by default for Windows Authenticode compatibility

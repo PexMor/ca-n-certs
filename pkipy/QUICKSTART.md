@@ -9,6 +9,9 @@ Sign PowerShell scripts with Authenticode signatures in 3 simple steps!
 
 ## Step 1: Generate Code Signing Certificate
 
+> ⚠️ **IMPORTANT**: Windows Authenticode for PowerShell scripts **only supports RSA certificates**.
+> The `step_codesign` function defaults to RSA for this reason.
+
 ```bash
 # Navigate to project root
 cd /path/to/ca-n-certs
@@ -16,7 +19,7 @@ cd /path/to/ca-n-certs
 # Source the certificate generation functions
 source steps.sh
 
-# Generate code signing certificate
+# Generate code signing certificate (RSA by default - required for Windows)
 step_codesign "MyCodeSign"
 ```
 
@@ -120,6 +123,16 @@ Import your CA certificates (see "Trust the Certificate" above).
 - Check network connectivity to timestamp server
 - Try a different timestamp server (see README for alternatives)
 - Sign without timestamp using `--timestamp-url` omitted
+
+### "Status: NotSigned" on Windows
+
+This means you used an **ECDSA certificate**. Windows Authenticode only supports RSA.
+
+```bash
+# Remove old certificate and regenerate with RSA (default)
+rm -rf ~/.config/demo-cfssl/codesign/mycodesign
+source steps.sh && step_codesign "MyCodeSign"
+```
 
 ## Quick Reference
 

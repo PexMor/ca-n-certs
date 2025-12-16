@@ -87,15 +87,20 @@ A **complete pure-Python PowerShell Authenticode signing tool** integrated into 
 
 ```bash
 source steps.sh
-step_codesign "MyCodeSign"
+step_codesign "MyCodeSign"          # RSA 3072-bit (default - required for Windows)
+step_codesign "MyCodeSign" rsa      # Explicit RSA
+step_codesign "MyCodeSign" ecdsa    # ECDSA - NOT for Windows!
 ```
 
 Creates:
 
 - Code signing certificate with proper EKU (codeSigning)
-- ECDSA P-384 key (matches project defaults)
+- **RSA 3072-bit key** (default - required for Windows Authenticode)
 - PKCS#12 bundle for easy use
 - Full certificate chain bundles
+
+> ⚠️ **IMPORTANT**: Windows Authenticode for PowerShell scripts **only supports RSA** certificates.
+> ECDSA signatures are valid CMS but Windows reports "NotSigned".
 
 ### PowerShell Script Signing
 
