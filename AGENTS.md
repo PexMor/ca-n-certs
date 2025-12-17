@@ -281,6 +281,157 @@ step_codesign "MyCodeSign" ecdsa    # ECDSA - NOT for Windows!
 - `example_workflow.sh` - Interactive demonstration
 - `crl_test.sh` - CRL management testing
 
+### ADR-012: Code Signing Intermediate CA (CSICA)
+
+**Decision**: Use a separate Intermediate CA specifically for code signing certificates
+
+**Context**: Windows Authenticode validates EKU chain compatibility
+
+**Problem**:
+Windows CryptoAPI computes effective EKU as the **intersection** of EKUs along the entire certificate chain.
+The regular Intermediate CA (ICA) has EKUs: `ServerAuth, ClientAuth, SecureEmail` but NOT `codeSigning`.
+Even though the leaf certificate has `codeSigning` EKU, Windows rejects the chain because:
+
+```
+{CodeSigning} ∩ {ServerAuth, ClientAuth, SecureEmail} = ∅
+```
+
+This results in "Certificate is not valid for the requested usage" error.
+
+**Solution**:
+
+Create a dedicated Code Signing Intermediate CA (CSICA) with `codeSigning` EKU:
+
+```bash
+# CSICA is created automatically before code signing certificates
+step_csica                    # Creates Code Signing Intermediate CA
+step_codesign "MyCodeSign"    # Issues cert from CSICA (not regular ICA)
+```
+
+**Certificate Chain Structure**:
+
+| Certificate              | EKU                                 | Purpose                       |
+| ------------------------ | ----------------------------------- | ----------------------------- |
+| Root CA                  | (none - unconstrained)              | Trust anchor                  |
+| ICA (regular)            | ServerAuth, ClientAuth, SecureEmail | TLS, email certificates       |
+| **CSICA (code signing)** | **codeSigning**                     | **Code signing certificates** |
+| Code Signing Leaf        | codeSigning                         | Signs PowerShell, executables |
+
+**EKU Chain Validation** (Windows):
+
+```
+Code Signing chain: Root (∅) ∩ CSICA ({codeSigning}) ∩ Leaf ({codeSigning}) = {codeSigning} ✅
+TLS chain:          Root (∅) ∩ ICA ({Server,Client,Email}) ∩ Leaf ({Server}) = {Server} ✅
+```
+
+**Files Created**:
+
+- `~/.config/demo-cfssl/csica-key.pem` - CSICA private key (RSA 4096-bit)
+- `~/.config/demo-cfssl/csica-ca.pem` - CSICA certificate (signed by Root CA)
+- `~/.config/demo-cfssl/csica-openssl.cnf` - OpenSSL config used
+
+**Important Notes**:
+
+1. CSICA uses RSA 4096-bit key for maximum Windows compatibility
+2. CSICA has `pathlen:0` constraint - can only issue end-entity certs
+3. After regenerating CSICA, all code signing certificates must be reissued
+4. Import both Root CA and CSICA to Windows trust stores for validation
+
+**Windows Import**:
+
+```powershell
+# Import Root CA to Trusted Root
+Import-Certificate -FilePath ca.pem -CertStoreLocation Cert:\CurrentUser\Root
+
+# Import CSICA to Intermediate CA store
+Import-Certificate -FilePath csica-ca.pem -CertStoreLocation Cert:\CurrentUser\CA
+
+# Import code signing PFX to Personal store
+Import-PfxCertificate -FilePath codesign.p12 -CertStoreLocation Cert:\CurrentUser\My
+```
+
+### ADR-013: Windows SIP Canonicalization for Cross-Platform Signing
+
+**Decision**: Implement Windows PowerShell SIP hash canonicalization in Python for cross-platform script signing
+
+**Context**: PowerShell script signatures require a specific hash computation that differs from raw file hashing
+
+**Discovery Date**: December 17, 2025
+
+**The Problem**:
+
+Windows' PowerShell SIP (`pwrshsip.dll`) does NOT hash raw file bytes. Early attempts at cross-platform
+signing failed with `HashMismatch` because we computed SHA1 of raw bytes while Windows computes SHA1 of
+UTF-16-LE encoded content.
+
+**Hash Comparison** (same file content):
+
+| Method                 | SHA1 Hash                                         |
+| ---------------------- | ------------------------------------------------- |
+| Raw bytes              | `c71dbef72717fef7fea2acc2235d5927cdbc3725`        |
+| UTF-8 → UTF-16-LE      | `fadd6127c82c3501fdccd31768b52083e35bdbe4`        |
+| **CP1252 → UTF-16-LE** | **`81f785f3a076e0a6a6d8cd5393ed251a5432cccb`** ✅ |
+| Windows embedded       | `81f785f3a076e0a6a6d8cd5393ed251a5432cccb` ✅     |
+
+**The Algorithm** (reverse-engineered from `pwrshsip.dll` behavior):
+
+```python
+def compute_sip_hash(raw_bytes: bytes, algorithm: str = 'sha1') -> bytes:
+    # Step 1: Detect encoding (check first 32 bytes only!)
+    if has_utf16_le_bom(raw_bytes):
+        encoding = 'utf-16-le'
+    elif has_utf16_be_bom(raw_bytes):
+        encoding = 'utf-16-be'
+    elif has_utf8_bom(raw_bytes):
+        encoding = 'utf-8-sig'
+    elif has_utf8_multibyte_in_first_32_bytes(raw_bytes):
+        encoding = 'utf-8'
+    else:
+        encoding = 'cp1252'  # Windows-1252 ANSI fallback
+
+    # Step 2: Decode to string
+    text = raw_bytes.decode(encoding)
+
+    # Step 3: Convert to UTF-16-LE (the canonicalization!)
+    utf16_bytes = text.encode('utf-16-le')
+
+    # Step 4: Hash
+    return hashlib.sha1(utf16_bytes).digest()
+```
+
+**Key Insight**: The encoding detection only checks the **first 32 bytes**. If a file has UTF-8
+multi-byte characters (like ✓ ✗) at position 473, they won't be detected, and the file falls
+back to CP1252. This causes UTF-8 multi-byte sequences to be interpreted as separate CP1252
+characters, producing a different Unicode string and thus a different UTF-16-LE hash.
+
+**Implementation** (`pkipy/__main__.py`):
+
+```python
+def is_text_utf8(data: bytes) -> bool:
+    """Check first 32 bytes for valid UTF-8 multi-byte sequences."""
+    check_data = data[:32]
+    # ... (validates UTF-8 continuation bytes)
+
+def get_script_encoding(data: bytes) -> str:
+    """Detect encoding matching Windows SIP behavior."""
+    # Check BOMs first, then UTF-8 multi-byte, then fallback to CP1252
+
+def compute_sip_hash(script_bytes: bytes, hash_algorithm: str) -> bytes:
+    """Compute hash the same way Windows PowerShell SIP does."""
+    encoding = get_script_encoding(script_bytes)
+    text = script_bytes.decode(encoding)
+    utf16_bytes = text.encode('utf-16-le')
+    return hashlib.sha1(utf16_bytes).digest()
+```
+
+**Result**: `pkipy` can now sign PowerShell scripts on Linux/macOS that validate on Windows!
+
+**References**:
+
+- [PowerShell-OpenAuthenticode](https://github.com/jborean93/PowerShell-OpenAuthenticode) - Key insight into UTF-16-LE
+- PowerShell SIP GUID: `603BCC1F-4B59-4E08-B724-D2C6297EF351`
+- SIP DLL: `pwrshsip.dll`
+
 ## Code Patterns
 
 ### Shell Script Pattern

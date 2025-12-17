@@ -1,32 +1,29 @@
-# pkipy - Pure Python PowerShell Authenticode Signer
+# pkipy - Cross-Platform PowerShell Authenticode Signer
 
-A pure Python implementation of Authenticode signing for PowerShell scripts with RFC3161 timestamping support.
+A **pure Python** implementation of Authenticode signing for PowerShell scripts that produces signatures **validated by Windows** without requiring Windows for signing.
 
-## Features
+## ✅ Key Features
 
-- ✅ **Pure Python** - No PowerShell or Windows required
-- ✅ **Cross-platform** - Works on Linux, macOS, and Windows
-- ✅ **RFC3161 Timestamping** - Optional trusted timestamp support
-- ✅ **Flexible Configuration** - Config file, environment variables, or CLI args
-- ✅ **PFX and PEM Support** - Use either certificate format
+- ✅ **Cross-platform**: Sign on Linux, macOS, or Windows
+- ✅ **Windows Validated**: Signatures pass `Get-AuthenticodeSignature`
+- ✅ **RFC3161 Timestamping**: Trusted timestamp support
+- ✅ **PFX and PEM Support**: Use either certificate format
+- ✅ **Flexible Configuration**: Config file, environment variables, or CLI args
 
-## Installation
+## 🎉 How It Works
 
-This tool is managed by `uv` and integrated into the ca-n-certs project:
+Windows' PowerShell SIP (Subject Interface Package) doesn't hash raw file bytes. Instead, it:
 
-```bash
-# Install dependencies
-uv sync
+1. **Detects encoding** (BOM, UTF-8 in first 32 bytes, or CP1252)
+2. **Decodes to string** using that encoding
+3. **Converts to UTF-16-LE**
+4. **Hashes the UTF-16-LE bytes**
 
-# Run directly
-uv run pkipy --help
-```
+`pkipy` implements this exact algorithm, allowing cross-platform signing!
 
 ## Quick Start
 
 ### 1. Generate a Code Signing Certificate
-
-First, generate a code signing certificate using the project's certificate generation scripts:
 
 ```bash
 # Source the steps.sh functions
@@ -34,98 +31,56 @@ source steps.sh
 
 # Generate code signing certificate (RSA by default - required for Windows)
 step_codesign "MyCodeSign"
-
-# Or explicitly specify RSA
-step_codesign "MyCodeSign" rsa
 ```
 
 > ⚠️ **IMPORTANT**: Windows Authenticode for PowerShell scripts **only supports RSA certificates**.
-> ECDSA signatures are valid CMS/PKCS#7 but Windows will report "NotSigned" for PS scripts.
-> The `step_codesign` function defaults to RSA for this reason.
 
 This creates:
 
-- Certificate and key: `~/.config/demo-cfssl/codesign/mycodesign/`
-- PKCS#12 file: `~/.config/demo-cfssl/codesign/mycodesign/codesign.p12`
+- Certificate: `~/.config/demo-cfssl/codesign/mycodesign/cert.pem`
+- PKCS#12: `~/.config/demo-cfssl/codesign/mycodesign/codesign.p12`
 
 ### 2. Sign a PowerShell Script
 
 ```bash
-# Using PFX file
+# Sign with timestamp
 uv run pkipy script.ps1 --output signed.ps1 \
   --pfx ~/.config/demo-cfssl/codesign/mycodesign/codesign.p12 \
   --timestamp-url http://timestamp.digicert.com
-
-# Using PEM files
-uv run pkipy script.ps1 --output signed.ps1 \
-  --cert ~/.config/demo-cfssl/codesign/mycodesign/cert.pem \
-  --key ~/.config/demo-cfssl/codesign/mycodesign/key.pem \
-  --timestamp-url http://timestamp.digicert.com
 ```
 
-### 3. Verify the Signature (on Windows with PowerShell)
+### 3. Verify on Windows
 
 ```powershell
+# Import CA certificates (one-time setup)
+Import-Certificate -FilePath ca.pem -CertStoreLocation Cert:\CurrentUser\Root
+Import-Certificate -FilePath csica-ca.pem -CertStoreLocation Cert:\CurrentUser\CA
+
+# Verify signature
 Get-AuthenticodeSignature signed.ps1 | Format-List *
-```
 
-Expected output:
-
-```
-Status                : Valid
-SignerCertificate     : [your certificate details]
-TimeStamperCertificate: [TSA certificate details]
+# Expected:
+# Status        : Valid
+# StatusMessage : Signature verified.
 ```
 
 ## Configuration
 
-### Priority Order
-
-Configuration is loaded in this order (later overrides earlier):
-
-1. **Config file**: `~/.config/pkipy/config.yaml` (or `.yml`, `.toml`)
-2. **Environment variables**: Prefix with `PKIPY_`
-3. **Command line arguments**: Direct CLI args
-
-### Config File Setup
-
-Create a config file for easier usage:
-
-```bash
-# Create config directory
-mkdir -p ~/.config/pkipy
-
-# Copy example config
-cp pkipy/config.yaml.example ~/.config/pkipy/config.yaml
-
-# Edit with your settings
-nano ~/.config/pkipy/config.yaml
-```
-
-Example `config.yaml`:
+### Config File (`~/.config/pkipy/config.yaml`)
 
 ```yaml
-# Use PFX file
 pfx: ~/.config/demo-cfssl/codesign/mycodesign/codesign.p12
 pfx-password: ""
-
-# Or use PEM files (comment out pfx if using this)
-# cert: ~/.config/demo-cfssl/codesign/mycodesign/cert.pem
-# key: ~/.config/demo-cfssl/codesign/mycodesign/key.pem
-
-# Timestamp server
 timestamp-url: http://timestamp.digicert.com
 ```
 
-With a config file, you can simply run:
+With a config file:
 
 ```bash
 uv run pkipy script.ps1 --output signed.ps1
 ```
 
 ### Environment Variables
-
-All config options can be set via environment variables with the `PKIPY_` prefix:
 
 ```bash
 export PKIPY_PFX=~/.config/demo-cfssl/codesign/mycodesign/codesign.p12
@@ -136,179 +91,131 @@ uv run pkipy script.ps1 --output signed.ps1
 
 ## Usage Examples
 
-### Basic Signing (No Timestamp)
+### Basic Signing
 
 ```bash
 uv run pkipy script.ps1 --output signed.ps1 \
   --pfx codesign.p12
 ```
 
-### Signing with Timestamp
-
-```bash
-uv run pkipy script.ps1 --output signed.ps1 \
-  --pfx codesign.p12 \
-  --timestamp-url http://timestamp.digicert.com
-```
-
-### Using PEM Files with Password-Protected Key
+### With PEM Files
 
 ```bash
 uv run pkipy script.ps1 --output signed.ps1 \
   --cert cert.pem \
   --key key.pem \
-  --key-password "mypassword" \
   --timestamp-url http://timestamp.digicert.com
 ```
 
-### Using Custom Config File
+### SHA-256 Hash Algorithm
 
 ```bash
 uv run pkipy script.ps1 --output signed.ps1 \
-  --config /path/to/custom-config.yaml
+  --pfx codesign.p12 \
+  --hash-algorithm sha256 \
+  --timestamp-url http://timestamp.digicert.com
 ```
 
 ## Timestamp Servers
 
-Popular RFC3161 timestamp servers (all free to use):
+Popular RFC3161 timestamp servers (all free):
 
 - DigiCert: `http://timestamp.digicert.com`
 - Sectigo: `http://timestamp.sectigo.com`
-- Comodo: `http://timestamp.comodoca.com`
-- IdenTrust: `http://timestamp.identrust.com`
-- Starfield: `http://tsa.starfieldtech.com`
-
-**Why use timestamps?**
-
-Timestamps prove when code was signed, allowing signatures to remain valid even after the certificate expires.
+- GlobalSign: `http://timestamp.globalsign.com/scripts/timestamp.dll`
 
 ## Technical Details
 
-### How It Works
+### Windows SIP Canonicalization
 
-1. **Build CMS SignedData**: Creates an Authenticode-compatible PKCS#7/CMS structure
-2. **Sign the Script**: Signs the script content with your private key
-3. **Request Timestamp** (optional): Asks RFC3161 TSA to timestamp the signature
-4. **Embed Timestamp**: Adds timestamp as unsigned attribute (`id-aa-signatureTimeStampToken`)
-5. **Embed Signature Block**: Wraps the CMS in PowerShell's `# SIG #` comment block
+The key to cross-platform signing is understanding how Windows computes the hash:
 
-### Standards Compliance
+```python
+# Encoding detection priority:
+# 1. UTF-16-LE BOM (FF FE)
+# 2. UTF-16-BE BOM (FE FF)
+# 3. UTF-8 BOM (EF BB BF)
+# 4. UTF-8 multi-byte in first 32 bytes
+# 5. Default: Windows-1252 (CP1252)
 
-- **RFC 5652**: Cryptographic Message Syntax (CMS)
-- **RFC 6960**: X.509 Internet Public Key Infrastructure Online Certificate Status Protocol (OCSP)
-- **RFC 3161**: Time-Stamp Protocol (TSP)
-- **Microsoft Authenticode**: Code signing format for Windows executables and scripts
+encoding = get_script_encoding(raw_bytes)
+text = raw_bytes.decode(encoding)
+utf16_bytes = text.encode('utf-16-le')
+hash = sha1(utf16_bytes)
+```
 
-### Dependencies
+### Authenticode Structure
 
-- `cryptography` - Cryptographic operations
-- `asn1crypto` - ASN.1 structure manipulation
-- `rfc3161ng` - RFC3161 timestamp client
-- `requests` - HTTP client for TSA communication
-- `configargparse` - Configuration management
-- `pyyaml` - YAML configuration parsing
+The signature embeds:
+
+- `SpcIndirectDataContent` with file hash
+- `SpcSipInfo` with PowerShell SIP GUID
+- Full certificate chain
+- RFC3161 timestamp (optional)
+
+See [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md) for full technical details.
 
 ## Troubleshooting
 
 ### "Status: NotSigned" on Windows
 
-This almost always means you used an **ECDSA certificate** instead of RSA.
-Windows Authenticode for PowerShell scripts **only supports RSA certificates**.
-
-**Solution**: Regenerate your code signing certificate with RSA (the default):
+This means you used an **ECDSA certificate**. Windows requires RSA:
 
 ```bash
-# Remove old ECDSA certificate (if exists)
+# Remove old certificate
 rm -rf ~/.config/demo-cfssl/codesign/mycodesign
 
-# Generate new RSA certificate (default)
+# Generate RSA certificate (default)
 source steps.sh
 step_codesign "MyCodeSign"
-
-# Re-sign your script
-uv run pkipy script.ps1 --output signed.ps1 \
-  --pfx ~/.config/demo-cfssl/codesign/mycodesign/codesign.p12 \
-  --timestamp-url http://timestamp.digicert.com
 ```
 
-### "Status: UnknownError" in PowerShell
+### "Status: UnknownError" or "Certificate not trusted"
 
-This usually means the certificate chain is not trusted. Solutions:
+Import CA certificates to Windows trust store:
 
-1. **Import Root CA** into Windows Trusted Root store:
+```powershell
+Import-Certificate -FilePath ca.pem -CertStoreLocation Cert:\CurrentUser\Root
+Import-Certificate -FilePath csica-ca.pem -CertStoreLocation Cert:\CurrentUser\CA
+```
 
-   ```powershell
-   Import-Certificate -FilePath ca.pem -CertStoreLocation Cert:\LocalMachine\Root
-   ```
+### "HashMismatch" Error
 
-2. **Import Intermediate CA** into Intermediate store:
-   ```powershell
-   Import-Certificate -FilePath ica-ca.pem -CertStoreLocation Cert:\LocalMachine\CA
-   ```
+This should not happen with current pkipy. If it does:
 
-### "The certificate chain was issued by an authority that is not trusted"
-
-Same as above - import your CA certificates into Windows certificate store.
-
-### Signature works but no timestamp
-
-Check that:
-
-- TSA URL is accessible from your network
-- Firewall allows outbound HTTP/HTTPS to TSA
-- TSA server is operational (try different TSA if one is down)
-
-### "Error: Either --pfx or both --cert and --key must be provided"
-
-You must specify certificate source. Options:
-
-- Use `--pfx codesign.p12`
-- Use `--cert cert.pem --key key.pem`
-- Configure in `~/.config/pkipy/config.yaml`
-- Set via environment: `PKIPY_PFX=codesign.p12`
-
-## Integration with Project
-
-This tool integrates with the ca-n-certs project:
-
-1. **Certificate Generation**: Use `step_codesign` function in `steps.sh`
-2. **CA Infrastructure**: Leverages existing Root CA and Intermediate CA
-3. **Certificate Format**: Compatible with project's certificate structure
-
-### Key Algorithm Requirements
-
-| Platform                   | Algorithm    | Status                       |
-| -------------------------- | ------------ | ---------------------------- |
-| Windows (PowerShell)       | **RSA only** | ✅ Required for Authenticode |
-| Windows (PowerShell)       | ECDSA        | ❌ Reports "NotSigned"       |
-| Linux/macOS (verification) | RSA          | ✅ Supported                 |
-| Linux/macOS (verification) | ECDSA        | ✅ Supported                 |
-
-The `step_codesign` function defaults to RSA 3072-bit for Windows compatibility.
+1. Ensure you're using the latest version
+2. Check that the script file isn't corrupted
+3. Try re-signing the original unsigned script
 
 ## Comparison with Other Tools
 
 | Feature            | pkipy | Set-AuthenticodeSignature | osslsigncode |
 | ------------------ | ----- | ------------------------- | ------------ |
-| Pure Python        | ✅    | ❌ (PowerShell)           | ❌ (C)       |
-| Cross-platform     | ✅    | ❌ (Windows only)         | ✅           |
+| Pure Python        | ✅    | ❌                        | ❌           |
+| Cross-platform     | ✅    | ❌                        | ✅           |
+| Windows Validated  | ✅    | ✅                        | N/A          |
+| PowerShell Scripts | ✅    | ✅                        | ❌           |
 | RFC3161 Timestamp  | ✅    | ✅                        | ✅           |
 | PFX Support        | ✅    | ✅                        | ✅           |
 | PEM Support        | ✅    | ❌                        | ✅           |
 | Config File        | ✅    | ❌                        | ❌           |
-| PowerShell Scripts | ✅    | ✅                        | ❌           |
+
+## Dependencies
+
+- `cryptography` - Cryptographic operations
+- `asn1crypto` - ASN.1 structure manipulation
+- `rfc3161ng` - RFC3161 timestamp client
+- `requests` - HTTP client for TSA
+- `configargparse` - Configuration management
+- `pyyaml` - YAML parsing
 
 ## License
 
 Same as the parent ca-n-certs project. See LICENSE file.
 
-## Contributing
-
-This tool is part of the ca-n-certs demonstration project. Contributions welcome!
-
 ## References
 
 - [RFC 5652 - Cryptographic Message Syntax](https://tools.ietf.org/html/rfc5652)
 - [RFC 3161 - Time-Stamp Protocol](https://tools.ietf.org/html/rfc3161)
-- [Microsoft Authenticode Specification](https://docs.microsoft.com/en-us/windows-hardware/drivers/install/authenticode)
-- [PowerShell Code Signing](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_signing)
+- [PowerShell-OpenAuthenticode](https://github.com/jborean93/PowerShell-OpenAuthenticode)
+- [Microsoft Authenticode](https://docs.microsoft.com/en-us/windows-hardware/drivers/install/authenticode)

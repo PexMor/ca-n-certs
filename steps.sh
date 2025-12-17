@@ -338,6 +338,124 @@ function step02() {
 
 function join_by { local IFS="$1"; shift; echo "$*"; }
 
+function step_csica() {
+    # Create Code Signing Intermediate Certificate Authority (CSICA)
+    # This ICA is specifically for code signing certificates with proper EKU chain
+    # 
+    # The regular ICA has EKUs: ServerAuth, ClientAuth, SecureEmail
+    # Windows requires the entire chain to permit codeSigning EKU
+    # So we need a separate intermediate with codeSigning EKU for code signing certs
+    
+    echo "Checking Code Signing Intermediate CA..."
+    
+    # Check if CSICA already exists and is valid
+    if [ -f "$BD/csica-ca.pem" ]; then
+        END_DATE=$(openssl x509 -in "$BD/csica-ca.pem" -noout -enddate | cut -d"=" -f2)
+        END_DATE_SECS=$($DATE -d "$END_DATE" +%s)
+        NUNIXTS=$($DATE +%s)
+        if [ $END_DATE_SECS -gt $NUNIXTS ]; then
+            echo "Code Signing Intermediate CA already exists and is valid"
+            x509info "$BD/csica-ca.pem"
+            return
+        else
+            echo "Code Signing Intermediate CA is expired, regenerating..."
+            rm -f "$BD/csica-key.pem" "$BD/csica.pem" "$BD/csica.csr" "$BD/csica-ca.pem"
+        fi
+    fi
+    
+    echo "Creating Code Signing Intermediate Certificate Authority..."
+    
+    # Create OpenSSL config for CSICA
+    cat > "$BD/csica-openssl.cnf" << EOF
+# OpenSSL configuration for Code Signing Intermediate CA
+# Generated: $(date)
+#
+# This intermediate CA is specifically for issuing code signing certificates.
+# Windows requires the entire certificate chain to permit the codeSigning EKU.
+# The regular ICA only permits ServerAuth, ClientAuth, SecureEmail.
+
+[ req ]
+default_bits        = 4096
+default_md          = sha256
+default_keyfile     = csica-key.pem
+prompt              = no
+encrypt_key         = no
+distinguished_name  = req_dn
+req_extensions      = v3_req
+
+[ req_dn ]
+C                   = CZ
+ST                  = Heart of Europe
+L                   = Prague
+O                   = At Home Company
+OU                  = Security Dept.
+CN                  = 000-AtHome-CodeSign-Intermediate-CA
+
+[ v3_req ]
+# Request extensions
+basicConstraints    = critical, CA:TRUE, pathlen:0
+keyUsage            = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+
+[ v3_signing_ica ]
+# Extensions for Code Signing Intermediate CA
+# Critical: This ICA can ONLY issue code signing certificates
+basicConstraints    = critical, CA:TRUE, pathlen:0
+keyUsage            = critical, keyCertSign, cRLSign
+extendedKeyUsage    = codeSigning
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+EOF
+
+    # Generate CSICA private key (RSA 4096 for compatibility)
+    echo "Generating CSICA private key (RSA 4096-bit)..."
+    openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 \
+        -out "$BD/csica-key.pem" 2>/dev/null
+    
+    # Generate Certificate Signing Request
+    echo "Generating CSICA Certificate Signing Request..."
+    openssl req -new \
+        -key "$BD/csica-key.pem" \
+        -out "$BD/csica.csr" \
+        -config "$BD/csica-openssl.cnf" 2>/dev/null
+    
+    # Sign CSICA with Root CA
+    echo "Signing CSICA with Root CA..."
+    openssl x509 -req \
+        -in "$BD/csica.csr" \
+        -CA "$BD/ca.pem" \
+        -CAkey "$BD/ca-key.pem" \
+        -CAcreateserial \
+        -out "$BD/csica-ca.pem" \
+        -days 3650 \
+        -sha256 \
+        -extfile "$BD/csica-openssl.cnf" \
+        -extensions v3_signing_ica 2>/dev/null
+    
+    # Also create unsigned version for completeness
+    cp "$BD/csica-ca.pem" "$BD/csica.pem"
+    
+    echo ""
+    echo -e "${GREEN}✓ Code Signing Intermediate CA created successfully!${COFF}"
+    echo "  Private Key: $BD/csica-key.pem"
+    echo "  Certificate: $BD/csica-ca.pem"
+    echo "  CSR: $BD/csica.csr"
+    echo ""
+    echo -e "${AZURE}This ICA is specifically for issuing code signing certificates.${COFF}"
+    echo -e "${AZURE}Windows Authenticode requires the entire chain to permit codeSigning EKU.${COFF}"
+    echo ""
+    
+    # Display certificate information
+    echo "--=[ Code Signing Intermediate CA files:"
+    info "$BD/csica-key.pem"
+    info "$BD/csica-ca.pem"
+    x509info "$BD/csica-ca.pem"
+    
+    echo ""
+    echo "Certificate Extensions:"
+    openssl x509 -in "$BD/csica-ca.pem" -noout -text | grep -A20 "X509v3 extensions" | sed 's/^/  /'
+}
+
 function step03() {
     local NAME=$1
     shift
@@ -925,6 +1043,8 @@ function step_codesign() {
     #   ecdsa - ECDSA P-384 - For non-Windows platforms only
     #
     # This function creates certificates with codeSigning EKU for Authenticode signing
+    # NOTE: Certificates are issued by CSICA (Code Signing Intermediate CA), not the regular ICA.
+    #       This ensures the entire certificate chain permits codeSigning EKU (Windows requirement).
     
     local NAME=$1
     local KEY_TYPE=${2:-rsa}  # Default to RSA for Windows Authenticode compatibility
@@ -936,6 +1056,18 @@ function step_codesign() {
         echo "Options:"
         echo "  rsa   - RSA 3072-bit (default) - Required for Windows Authenticode"
         echo "  ecdsa - ECDSA P-384 - For non-Windows platforms only"
+        return 1
+    fi
+    
+    # Check that Code Signing Intermediate CA exists
+    if [ ! -f "$BD/csica-ca.pem" ] || [ ! -f "$BD/csica-key.pem" ]; then
+        echo -e "${RED}Error: Code Signing Intermediate CA (CSICA) not found!${COFF}"
+        echo "Please run step_csica first to create the Code Signing Intermediate CA."
+        echo ""
+        echo "The CSICA is required because:"
+        echo "  - Regular ICA has EKUs: ServerAuth, ClientAuth, SecureEmail (no codeSigning)"
+        echo "  - Windows validates the entire chain must permit codeSigning EKU"
+        echo "  - CSICA has EKU: codeSigning - specifically for code signing certificates"
         return 1
     fi
     
@@ -1054,12 +1186,16 @@ EOF
         -out "$BD/codesign/${FOLDER_NAME}/codesign.csr" \
         -config "$BD/codesign/${FOLDER_NAME}/openssl.cnf" 2>/dev/null
     
-    # Sign the certificate with Intermediate CA
-    echo "Signing certificate with Intermediate CA..."
+    # Sign the certificate with Code Signing Intermediate CA (CSICA)
+    # NOTE: We use CSICA instead of regular ICA because:
+    # - Regular ICA has EKUs: ServerAuth, ClientAuth, SecureEmail (no codeSigning)
+    # - Windows validates EKU chain: intersection of all certs in chain must include codeSigning
+    # - CSICA has EKU: codeSigning - specifically for code signing certificates
+    echo "Signing certificate with Code Signing Intermediate CA (CSICA)..."
     openssl x509 -req \
         -in "$BD/codesign/${FOLDER_NAME}/codesign.csr" \
-        -CA "$BD/ica-ca.pem" \
-        -CAkey "$BD/ica-key.pem" \
+        -CA "$BD/csica-ca.pem" \
+        -CAkey "$BD/csica-key.pem" \
         -CAcreateserial \
         -out "$BD/codesign/${FOLDER_NAME}/cert.pem" \
         -days 825 \
@@ -1067,9 +1203,9 @@ EOF
         -extfile "$BD/codesign/${FOLDER_NAME}/openssl.cnf" \
         -extensions v3_ca 2>/dev/null
     
-    # Create certificate bundles
-    cat "$BD/codesign/${FOLDER_NAME}/cert.pem" "$BD/ica-ca.pem" > "$BD/codesign/${FOLDER_NAME}/bundle-2.pem"
-    cat "$BD/codesign/${FOLDER_NAME}/cert.pem" "$BD/ica-ca.pem" "$BD/ca.pem" > "$BD/codesign/${FOLDER_NAME}/bundle-3.pem"
+    # Create certificate bundles (using CSICA, not regular ICA)
+    cat "$BD/codesign/${FOLDER_NAME}/cert.pem" "$BD/csica-ca.pem" > "$BD/codesign/${FOLDER_NAME}/bundle-2.pem"
+    cat "$BD/codesign/${FOLDER_NAME}/cert.pem" "$BD/csica-ca.pem" "$BD/ca.pem" > "$BD/codesign/${FOLDER_NAME}/bundle-3.pem"
     
     # Create PKCS#12 file for use with signing tools
     P12_PASS="${CODESIGN_P12_PASSWORD:-}"
@@ -1165,9 +1301,17 @@ step_email_openssl "John Extended" john.extended@example.com johne@company.com
 # Usually you run this step once for your TSA server
 step_tsa "MyTSA"
 
-# Step 5 - prepare Code Signing certificate for Authenticode signing
+# Step 5 - prepare Code Signing Intermediate CA (CSICA)
+# This is a separate intermediate CA specifically for code signing certificates.
+# Windows Authenticode validates the entire certificate chain for EKU compatibility.
+# The regular ICA only permits ServerAuth, ClientAuth, SecureEmail (not codeSigning).
+# CSICA has codeSigning EKU so the chain validates properly on Windows.
+step_csica
+
+# Step 6 - prepare Code Signing certificate for Authenticode signing
 # Usually you run this step once for code signing operations
 # NOTE: RSA is the default and REQUIRED for Windows Authenticode/PowerShell scripts
+# NOTE: Certificates are now issued by CSICA (Code Signing Intermediate CA)
 # Use: step_codesign "Name" rsa     (default - Windows compatible)
 #      step_codesign "Name" ecdsa   (non-Windows only)
 step_codesign "MyCodeSign"  # Uses RSA by default for Windows Authenticode compatibility

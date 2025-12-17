@@ -1,6 +1,8 @@
 # pkipy Quick Start Guide
 
-Sign PowerShell scripts with Authenticode signatures in 3 simple steps!
+Sign PowerShell scripts with Authenticode signatures **from any platform** (Linux, macOS, Windows)!
+
+🎉 **Cross-platform signing now works!** Signatures validate with Windows `Get-AuthenticodeSignature`.
 
 ## Prerequisites
 

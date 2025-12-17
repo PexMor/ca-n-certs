@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 pkipy = "pkipy.__main__:main"
+dasn1 = "pkipy.dasn1:main"
 
 [tool.uv]
 package = true
